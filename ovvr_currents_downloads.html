@@ -2583,7 +2583,8 @@ void main(){
     ocolor4 = vec4(INa, Ito, ICaL, IKr);
     ocolor5 = vec4(IKs, IK1, INaCa, INaK);
     ocolor6 = vec4(INab, ICab, IKb, IpCa);
-    ocolor7 = vec4(ICaNa, ICaK, INafast, INalate);
+    ocolor7 = vec4(INalate,0.,0.,0.);
+    //ocolor7 = vec4(ICaNa, ICaK, INafast, INalate);
     ocolor8 = vec4(INaCai, INaCass, Jrel_i, Jup_i);
     ocolor9 = vec4(JrelNP_i, JrelCaMK_i, Jtr_i, Isum_i);
     ocolor10= vec4(0.);
@@ -3095,7 +3096,8 @@ function loadWebGL(){
     } ) ;
     
     var clickCopy = new Abubu.Copy( env.scolor1, env.fcolor4 ) ;
-    
+
+
     var mouseDrag_1 = new Abubu.MouseListener({
         canvas : document.getElementById('canvas_1') ,
         event : 'drag' ,
@@ -3311,7 +3313,7 @@ function loadWebGL(){
             color : [ 0.3,0.,0.0 ],
             visible : true ,
             timewindow : 1000 , 
-            probePosition : [0.5,0.5] 
+            probePosition : [0.9,0.9]
     } ) ;
 
     // voltage signal ....................................................
@@ -3323,7 +3325,7 @@ function loadWebGL(){
             color : [ 0.,.4,0.0 ],
             visible : true ,
             timewindow : 1000 , 
-            probePosition : [0.5,0.5] 
+            probePosition : [0.9,0.9]
     } ) ;
 
 
@@ -3337,7 +3339,7 @@ function loadWebGL(){
     env.pplot = new Abubu.PhasePlot({
         canvas : document.getElementById('canvas_4') ,
         grid : 'on',
-        probePosition : [0.5,0.5], 
+        probePosition : [0.9,0.9], 
     
         // horizontal axis info
         xcolor      : env.fcolor4 ,
@@ -3378,14 +3380,71 @@ function loadWebGL(){
  *------------------------------------------------------------------------
  */
 
+    var initial_wait = 20000; // 20s
+    var pacePeriod = 1000; // 1s
+    var ending_time = initial_wait + pacePeriod;
+    var pace_intensity = 40;
+    var pace_position = [0.9, 0.9];
+    var record_position = [0.5,0.5];
+    var record_position_x = record_position[0];
+    var record_position_y = record_position[1];
+    var current_recorder
 
-    env.skip = 30 ;
+    // pacemaker scheduling is defined in loadWebGL scope to access click solver
+    nextCornerClickTime = pacePeriod ;
+    env.fireCornerClick = function(){
+        click.uniforms.clickPosition.value =  pace_position;
+        click.render() ;
+        clickCopy.render() ;
+    }    
+
+    env.skip = 30;
     env.running = false ;
     env.run = function(){
         if (env.running){
             for(var i = 0 ; i<env.skip ; i++){
                 env.march() ;
-                env.updateSignals() ; 
+                env.updateSignals() ;
+
+                if (env.time <= ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
+                    env.fireCornerClick() ;
+                }
+                if ( env.time > nextCornerClickTime + 1 ){
+                    nextCornerClickTime += pacePeriod ;
+                }
+                
+                if ( env.time >= initial_wait ){
+                    x_scaled = Math.floor(record_position_x*env.width) ;
+                    y_scaled = Math.floor(record_position_y*env.height) ;
+                    current_recorder += ';' + env.fcolor4.value[(x_scaled*env.width + y_scaled)*4];
+                    current_recorder += ';' + env.current4.value[(x_scaled*env.width + y_scaled)*4] +','+
+                                        env.current4.value[(x_scaled*env.width + y_scaled)*4+1]+','+
+                                        env.current4.value[(x_scaled*env.width + y_scaled)*4+2]+','+
+                                        env.current4.value[(x_scaled*env.width + y_scaled)*4+3];
+                    current_recorder += ';' + env.current5.value[(x_scaled*env.width + y_scaled)*4] +','+
+                                        env.current5.value[(x_scaled*env.width + y_scaled)*4+1]+','+
+                                        env.current5.value[(x_scaled*env.width + y_scaled)*4+2]+','+
+                                        env.current5.value[(x_scaled*env.width + y_scaled)*4+3];
+                    current_recorder += ';' + env.current6.value[(x_scaled*env.width + y_scaled)*4] +','+
+                                        env.current6.value[(x_scaled*env.width + y_scaled)*4+1]+','+
+                                        env.current6.value[(x_scaled*env.width + y_scaled)*4+2]+','+
+                                        env.current6.value[(x_scaled*env.width + y_scaled)*4+3];
+                    current_recorder += ';' + env.current7.value[(x_scaled*env.width + y_scaled)*4] +','+
+                                        env.current7.value[(x_scaled*env.width + y_scaled)*4+1]+','+
+                                        env.current7.value[(x_scaled*env.width + y_scaled)*4+2]+','+
+                                        env.current7.value[(x_scaled*env.width + y_scaled)*4+3];
+                    current_recorder += '\n';
+                }
+                //ocolor4 = vec4(INa, Ito, ICaL, IKr);
+                //ocolor5 = vec4(IKs, IK1, INaCa, INaK);
+                //ocolor6 = vec4(INab, ICab, IKb, IpCa);
+                //ocolor7 = vec4(INalate,0.,0.,0.);
+                if (env.time > ending_time -500 && env.time < ending_time + 2*env.dt -500){
+                    current_recorder = 'voltage;INa, Ito, ICaL, IKr;IKs, IK1, INaCa, INaK;INab, ICab, IKb, IpCa;INalate,NA,NA,NA\n' + current_recorder ;
+                    saveCsvFile(current_recorder) ;
+                    env.running = false ;
+                }
+
                 if ( i%5 === 0 ){
                     env.pplot.update() ;
                 }
@@ -3400,22 +3459,54 @@ function loadWebGL(){
     env.run() ;
 }
 
+function saveCsvFile(data_to_download) {
+    const blob = new Blob([data_to_download], { type: 'text/csv;charset=utf-8' });
+
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+
+    const name_download = 'currents_ovvr' + '_APD_step_' + (2 * env.skip * env.dt) + '.csv';
+
+    link.href = url;
+    link.download = name_download;
+
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+
+    URL.revokeObjectURL(url); // Cleanup
+}
 /*========================================================================
  * add multiple parameters to the GUI
  *========================================================================
  */ 
-function sampleCurrent(current_texture,sample_texture) {
-	
-    env.sampler = new Abubu.Solver({
-		fragmentShader : source('samplerShader') ,
-        vertexShader : source('vertShader') ,
-		uniforms:{
-			icolor0 : { type : 't', value : current_texture } ,
-		} ,
-		targets:{
-			ocolor : { location : 0 , target : sample_texture } ,
-		}
-	} ) ;
+env.sampler = new Abubu.Solver({
+    fragmentShader : source('samplerShader'),
+    vertexShader   : source('vertShader'),
+    uniforms: {
+      icolor0 : { type : 't', value : env.current4 }, // placeholder
+    },
+    targets: {
+      ocolor  : { location : 0, target : env.sampleTex }, // placeholder
+    }
+  });
+function recordCur4to7(sample4, sample5, sample6, sample7){
+    // cur4
+    env.sampler.uniforms.icolor0.value = env.current4;
+    env.sampler.targets.ocolor.target  = sample4;
+    env.sampler.render();
+    // cur5
+    env.sampler.uniforms.icolor0.value = env.current5;
+    env.sampler.targets.ocolor.target  = sample5;
+    env.sampler.render();
+    // cur6
+    env.sampler.uniforms.icolor0.value = env.current6;
+    env.sampler.targets.ocolor.target  = sample6;
+    env.sampler.render();
+    // cur7
+    env.sampler.uniforms.icolor0.value = env.current7;
+    env.sampler.targets.ocolor.target  = sample7;
+    env.sampler.render();
 }
 function addToGui( 
         guiElemenent ,  // gui element to add options into
