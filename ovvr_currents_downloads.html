@@ -2615,10 +2615,9 @@ void main() {
 
     // read the color of the pixel .......................................
     vec4 color = texture( inTexture , cc ) ;
- 
-    if ( length(clickPosition - cc )< clickRadius ){
-        u = 1. ;
-    }
+
+    u = -61 ;
+
 
     // output the color of the pixel .....................................
     ocolor = color ;
@@ -3406,14 +3405,14 @@ function loadWebGL(){
                 env.march() ;
                 env.updateSignals() ;
 
-                if (env.time <= ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
+                if (env.time < ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
                     env.fireCornerClick() ;
                 }
                 if ( env.time > nextCornerClickTime + 1 ){
                     nextCornerClickTime += pacePeriod ;
                 }
                 
-                if ( env.time >= initial_wait ){
+                if ( env.time >= initial_wait-100 ){
                     x_scaled = Math.floor(record_position_x*env.width) ;
                     y_scaled = Math.floor(record_position_y*env.height) ;
                     current_recorder += ';' + env.fcolor4.value[(x_scaled*env.width + y_scaled)*4];
@@ -3439,7 +3438,7 @@ function loadWebGL(){
                 //ocolor5 = vec4(IKs, IK1, INaCa, INaK);
                 //ocolor6 = vec4(INab, ICab, IKb, IpCa);
                 //ocolor7 = vec4(INalate,0.,0.,0.);
-                if (env.time > ending_time -500 && env.time < ending_time + 2*env.dt -500){
+                if (env.time > initial_wait +500 && env.time < initial_wait + 2*env.dt +500){
                     current_recorder = 'voltage;INa, Ito, ICaL, IKr;IKs, IK1, INaCa, INaK;INab, ICab, IKb, IpCa;INalate,NA,NA,NA\n' + current_recorder ;
                     saveCsvFile(current_recorder) ;
                     env.running = false ;
