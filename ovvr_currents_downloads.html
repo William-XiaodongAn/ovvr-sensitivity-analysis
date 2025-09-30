@@ -856,6 +856,7 @@ uniform float       dt ;                /* time step                */
 uniform float       ds ;                /* domain size in x,y-dir   */
 uniform float       diffCoef ;          /* diffusion coeficient     */
 uniform float       C_m ;               /* membrane capacitance     */
+uniform float       I_init ;            /* initial stimulus current */
 
 uniform int         cellType ;
 
@@ -1822,6 +1823,7 @@ void main(){
                 +   ICab
                 +   IKb
                 +   IpCa 
+                +   I_init
                 ;
     // V .................................................................
     vec4 lap ; vec2 size ;
@@ -2616,7 +2618,7 @@ void main() {
     // read the color of the pixel .......................................
     vec4 color = texture( inTexture , cc ) ;
 
-    u = -61 ;
+    u = -61. ;
 
 
     // output the color of the pixel .....................................
@@ -2999,14 +3001,15 @@ function loadWebGL(){
             super(env, env.compFloats, env.compInts) ;
             for(let i=0; i<11 ; i++){
                 this['icolor'+i] = { type : 't', value : _fc[i] } ;
-            }   
+            }
         }
     }
 
     // uniforms for comp2 solvers ........................................
     class Comp2Uniforms extends CompUniforms{
         constructor( _fc, _sc ){
-            super(env, env.compFloats, env.compInts ) ; 
+            super(env, env.compFloats, env.compInts ) ;
+            this.I_init = { type: 'f', value: env.I_init };
             // colors already updated by comp1
             for(let i=0; i<4 ; i++){
                 this['icolor'+i] = { type : 't', value : _sc[i] } ;
@@ -3378,7 +3381,7 @@ function loadWebGL(){
  * Run sequence
  *------------------------------------------------------------------------
  */
-
+    env.I_init = 0. ;
     var initial_wait = 20000; // 20s
     var pacePeriod = 1000; // 1s
     var ending_time = initial_wait + pacePeriod;
@@ -3388,7 +3391,7 @@ function loadWebGL(){
     var record_position_x = record_position[0];
     var record_position_y = record_position[1];
     var current_recorder
-
+    var initialized = false ;
     // pacemaker scheduling is defined in loadWebGL scope to access click solver
     nextCornerClickTime = pacePeriod ;
     env.fireCornerClick = function(){
@@ -3406,7 +3409,16 @@ function loadWebGL(){
                 env.updateSignals() ;
 
                 if (env.time < ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
-                    env.fireCornerClick() ;
+                    env.I_init = -40 ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.fcomp2,env.scomp2]) ;
+                    console.log(env.I_init)
+                    initialized = true ;
+                }
+                if (initialized === true && env.time > nextCornerClickTime + 1){
+                    env.I_init = 0 ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.fcomp2,env.scomp2]) ;   
+                    console.log(env.I_init)
+                    initialized = false ;
                 }
                 if ( env.time > nextCornerClickTime + 1 ){
                     nextCornerClickTime += pacePeriod ;
