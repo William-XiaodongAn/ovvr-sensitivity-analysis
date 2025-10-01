@@ -22,6 +22,7 @@ uniform float       dt ;
 uniform float       ds_x, ds_y ;
 uniform float       diffCoef, C_m ;
 uniform float       minVlt, maxVlt ;
+uniform float       I_init;
 
 uniform sampler2D   mhhjIn ;
 uniform sampler2D   hjmhIn ;
@@ -1182,6 +1183,7 @@ void main() {
                 +   ICab
                 +   IKb
                 +   IpCa 
+                +   I_init
                 ;
 
 /*------------------------------------------------------------------------

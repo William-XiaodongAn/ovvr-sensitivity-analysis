@@ -3410,7 +3410,7 @@ function loadWebGL(){
                 env.updateSignals() ;
 
                 if (env.time < ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
-                    env.I_init = -40 ;
+                    env.I_init = -45 ;
                     Abubu.setUniformInSolvers('I_init', env.I_init,[env.fcomp2,env.scomp2]) ;
                     console.log(env.I_init)
                     initialized = true ;

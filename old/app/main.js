@@ -883,7 +883,7 @@ function Environment(){
 
     this.minVlt     = -100 ;
     this.maxVlt     = 50 ;
-
+    this.I_init     = 0 ;
     /* Extra-cellular concenterations */
     this.Ca_o       = 1.8 ;
     this.Na_o       = 140 ;
@@ -980,7 +980,7 @@ function Environment(){
     this.colormap    =   'rainbowHotSpring';
     this.dispWidth   =   512 ;
     this.dispHeight  =   512 ;
-    this.frameRate   =   1200 ;
+    this.frameRate   =   2400 ; //1200
     this.timeWindow  =   1000 ;
     this.probeVisiblity = false ;
     this.probePositionX = 0.5 ;
@@ -1569,6 +1569,7 @@ function loadWebGL()
         this.C_m            = { type : 'f', value : env.C_m         } ;
         this.minVlt         = { type : 'f', value : env.minVlt      } ;
         this.maxVlt         = { type : 'f', value : env.maxVlt      } ;
+        this.I_init         = { type : 'f', value : env.I_init       } ;
         this.ds_x           = { type : 'f', value : env.ds_x        } ;
         this.ds_y           = { type : 'f', value : env.ds_y        } ;
 
@@ -2235,7 +2236,9 @@ env.apdInit = new Abubu.Solver({
     var initial_wait = 20000; // 20s
     var pacePeriod = 1000; // 1s
     var ending_time = initial_wait + pacePeriod;
-    var pace_intensity = 40;
+    var init_cond_intensity_max = -90;
+    var init_cond_intensity_min = -65;
+    var init_cond_intensity = init_cond_intensity_min + 1;
     var pace_position = [0.9, 0.9];
     var record_position = [0.5,0.5];
     var record_position_x = record_position[0];
@@ -2244,6 +2247,7 @@ env.apdInit = new Abubu.Solver({
     var x_scaled
     var y_scaled
     var nextCornerClickTime = pacePeriod ;
+    var initialized = false ;
     env.fireCornerClick = function(){
         env.click.uniforms.clickPosition.value =  pace_position;
         env.click.render() ;
@@ -2257,7 +2261,7 @@ env.apdInit = new Abubu.Solver({
 
     env.render = function(){
         if (env.running){
-            for(var i=0 ; i< env.frameRate/120 ; i++){
+            for(var i=0 ; i< env.frameRate/10 ; i++){
                 env.s1comp1.render() ;
                 env.s2comp1.render() ;
 
@@ -2273,7 +2277,16 @@ env.apdInit = new Abubu.Solver({
                 env.paceTime += 2.0*env.dt ;
 
                 if (env.time < ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
-                    env.fireCornerClick() ;
+                    env.I_init = init_cond_intensity ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.s2comp1,env.s2comp2]) ;
+                    console.log(env.I_init)
+                    initialized = true ;
+                }
+                if (initialized === true && env.time > nextCornerClickTime + 1){
+                    env.I_init = 0 ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.s2comp1,env.s2comp2]) ;   
+                    console.log(env.I_init)
+                    initialized = false ;
                 }
                 if ( env.time > nextCornerClickTime + 1 ){
                     nextCornerClickTime += pacePeriod ;
@@ -2303,8 +2316,15 @@ env.apdInit = new Abubu.Solver({
 
                 if (env.time > initial_wait +500 && env.time < initial_wait + 2*env.dt +500){
                     current_recorder = 'voltage;ICaL,ICaNa,IpCa,ICab;ICaK,IKs,IKr,IK1;IKb,INaK,INab,INa;INaCa,Ito,INalate,NA,NA\n' + current_recorder ;
-                    saveCsvFile(current_recorder) ;
-                    env.running = false ;
+                    saveCsvFile(current_recorder,-init_cond_intensity) ;
+                    env.initialize();
+                    init_cond_intensity = init_cond_intensity_min + 1
+                    nextCornerClickTime = pacePeriod ;
+
+                    if ( init_cond_intensity <= init_cond_intensity_max ){
+                        env.running = false ;
+                        console.log('finished all initial conditions')
+                    }
                 }
 
                 stats.update();
@@ -2332,14 +2352,13 @@ env.apdInit = new Abubu.Solver({
         requestAnimationFrame(env.render) ;
     }
 
-function saveCsvFile(data_to_download) {
+function saveCsvFile(data_to_download,init_cond_intensity) {
     const blob = new Blob([data_to_download], { type: 'text/csv;charset=utf-8' });
 
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
 
-    const name_download = 'currents_ovvr' + '_APD_step_' + (2 * env.skip * env.dt) + '.csv';
-
+    const name_download = 'currents_ovvr' + '_old_' + init_cond_intensity +'.csv';
     link.href = url;
     link.download = name_download;
 

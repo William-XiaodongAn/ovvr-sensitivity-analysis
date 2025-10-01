@@ -78,7 +78,7 @@ void main() {
  */
     float   vlt = -87.84 ;
     if ( !restInitCond )
-        if (pixPos.x<0.2)
+        if (pixPos.x<0.)
             vlt = 0. ;
     float   v   = ( vlt - minVlt )/(maxVlt - minVlt) ;
 
