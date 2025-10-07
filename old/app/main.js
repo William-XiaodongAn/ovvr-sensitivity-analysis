@@ -2243,7 +2243,7 @@ env.apdInit = new Abubu.Solver({
     var record_position = [0.5,0.5];
     var record_position_x = record_position[0];
     var record_position_y = record_position[1];
-    var current_recorder
+    var current_recorder = ""
     var x_scaled
     var y_scaled
     var nextCornerClickTime = pacePeriod ;
@@ -2318,9 +2318,9 @@ env.apdInit = new Abubu.Solver({
                     current_recorder = 'voltage;ICaL,ICaNa,IpCa,ICab;ICaK,IKs,IKr,IK1;IKb,INaK,INab,INa;INaCa,Ito,INalate,NA,NA\n' + current_recorder ;
                     saveCsvFile(current_recorder,-init_cond_intensity) ;
                     env.initialize();
-                    init_cond_intensity = init_cond_intensity_min + 1
+                    init_cond_intensity +=  1
                     nextCornerClickTime = pacePeriod ;
-
+                    current_recorder = '';
                     if ( init_cond_intensity <= init_cond_intensity_max ){
                         env.running = false ;
                         console.log('finished all initial conditions')
