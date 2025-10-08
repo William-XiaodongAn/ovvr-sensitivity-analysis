@@ -387,7 +387,8 @@ function loadWebGL()
 
     env.current0 = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;
     env.current1 = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;
-    env.current2 = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;   
+    env.current2 = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;  
+    env.fvrnk.pairable = true; 
     env.current0.pairable = true;
     env.current1.pairable = true;
     env.current2.pairable = true;
@@ -657,6 +658,10 @@ function loadWebGL()
  *------------------------------------------------------------------------
  */
     // Create probes for reading texture values (all 4 channels)
+    env.voltageProbe = new ComputeGL.Probe(env.fvrnk, {
+        channel: 'r',
+        probePosition: [0.5, 0.5]
+    });
     env.current0Probe = new ComputeGL.Probe(env.current0, {
         channel: 'r',
         probePosition: [0.5, 0.5]
@@ -671,23 +676,23 @@ function loadWebGL()
         channel: 'r', 
         probePosition: [0.5, 0.5]
     });
+    env.I_init = 0. ;
     var initial_wait = 20000; // 20s
     var pacePeriod = 1000; // 1s
     var ending_time = initial_wait + pacePeriod;
-    var pace_intensity = -40;
+    var pace_intensity = 40;
     var pace_position = [0.9, 0.9];
     var record_position = [0.5,0.5];
     var record_position_x = record_position[0];
     var record_position_y = record_position[1];
     var current_recorder
-    var x_scaled
-    var y_scaled
+    var initialized = false ;
     var nextCornerClickTime = pacePeriod ;
     env.fireCornerClick = function(){
-        env.click.uniforms.clickPosition.value =  pace_position;
-        env.click.render() ;
-        env.clickCopy.render() ;
-    }  
+        click.uniforms.clickPosition.value =  pace_position;
+        click.render() ;
+        clickCopy.render() ;
+    }    
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
@@ -701,27 +706,69 @@ function loadWebGL()
                 env.disp.updateTipt() ;
 
                 if (env.time < ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
-                    env.I_init = pace_intensity ;
-                    
+                    env.I_init = -40 ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;
+                    console.log(env.I_init)
+                    initialized = true ;
                 }
+                if (initialized === true && env.time > nextCornerClickTime + 1){
+                    env.I_init = 0 ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;   
+                    console.log(env.I_init)
+                    initialized = false ;
+                }      
                 if ( env.time > nextCornerClickTime + 1 ){
                     nextCornerClickTime += pacePeriod ;
-                }                         
+                }
                 // Read all 4 channels (RGBA) from current textures
                 var current0_rgba = env.current0Probe.getPixel(); // Float32Array[4]
                 var current1_rgba = env.current1Probe.getPixel(); // Float32Array[4]
                 var current2_rgba = env.current2Probe.getPixel(); // Float32Array[4]
-                
-                console.log("Current0 RGBA:", current0_rgba[0], current0_rgba[1], current0_rgba[2], current0_rgba[3]);
-                console.log("Current1 RGBA:", current1_rgba[0], current1_rgba[1], current1_rgba[2], current1_rgba[3]);
-                console.log("Current2 RGBA:", current2_rgba[0], current2_rgba[1], current2_rgba[2], current2_rgba[3]);
+                var voltage = env.voltageProbe.getPixel()[0]; // Membrane voltage at probe
+                if ( env.time >= initial_wait-100 ){
+                    current_recorder += ';' + voltage;
+                    current_recorder += ';' + current0_rgba[0]+','+
+                                        current0_rgba[1]+','+
+                                        current0_rgba[2]+','+
+                                        current0_rgba[3];
+                    current_recorder += ';' + current1_rgba[0]+','+
+                                        current1_rgba[1]+','+
+                                        current1_rgba[2]+','+
+                                        current1_rgba[3];
+                    current_recorder += ';' + current2_rgba[0] +','+
+                                        current2_rgba[1]+','+
+                                        current2_rgba[2]+','+
+                                        current2_rgba[3];
+                    current_recorder += '\n';
+                }
+                if (env.time > initial_wait +500 && env.time < initial_wait + 2*env.dt +500){
+                    current_recorder = 'voltage;INa,Ito,ICaL,IKs;IpK, INaK, IKr, INaCa;IK1, IbCa, IpCa, IbNa\n' + current_recorder ;
+                    saveCsvFile(current_recorder) ;
+                    env.running = false ;
+                }
             }
 
             refreshDisplay();
         }
         requestAnimationFrame(env.render) ;
     }
+    function saveCsvFile(data_to_download) {
+        const blob = new Blob([data_to_download], { type: 'text/csv;charset=utf-8' });
 
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+
+        const name_download = 'currents_ovvr' + '_APD_step_' + (2 * env.skip * env.dt) + '.csv';
+
+        link.href = url;
+        link.download = name_download;
+
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        URL.revokeObjectURL(url); // Cleanup
+    }
 /*------------------------------------------------------------------------
  * add environment to document
  *------------------------------------------------------------------------

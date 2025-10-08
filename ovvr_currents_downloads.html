@@ -3394,7 +3394,7 @@ function loadWebGL(){
     var current_recorder
     var initialized = false ;
     // pacemaker scheduling is defined in loadWebGL scope to access click solver
-    nextCornerClickTime = pacePeriod ;
+    var nextCornerClickTime = pacePeriod ;
     env.fireCornerClick = function(){
         click.uniforms.clickPosition.value =  pace_position;
         click.render() ;
@@ -3410,7 +3410,7 @@ function loadWebGL(){
                 env.updateSignals() ;
 
                 if (env.time < ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
-                    env.I_init = -45 ;
+                    env.I_init = -40 ;
                     Abubu.setUniformInSolvers('I_init', env.I_init,[env.fcomp2,env.scomp2]) ;
                     console.log(env.I_init)
                     initialized = true ;
