@@ -693,6 +693,39 @@ function loadWebGL()
         click.render() ;
         clickCopy.render() ;
     }    
+    /*
+    this.C_Na        =   1.0 ;
+    this.C_NaCa      =   1.0 ;
+    this.C_to        =   1.0 ;
+    this.C_CaL       =   1.0 ;
+    this.C_Kr        =   1.0 ;
+    this.C_Ks        =   1.0 ;
+    this.C_K1        =   1.0 ;
+    this.C_NaK       =   1.0 ;
+    this.C_bNa       =   1.0 ;
+    this.C_pK        =   1.0 ;
+    this.C_bCa       =   1.0 ;
+    this.C_pCa       =   1.0 ;
+    this.C_leak      =   1.0 ;
+    this.C_up        =   1.0 ;
+    this.C_rel       =   1.0 ;
+    this.C_xfer      =   1.0 ;*/
+
+    var first_key_lst = ["0","1","2","3","4","5","6","7","8","9","10","11"]; // singular vector idx
+    var second_key_lst = ["-0.5","-0.2","0.0","0.2","0.5"]; // epsilon values
+    var first = 0;
+    var second = 0;
+    var perturbed_vector = perturbed_currents[first_key_lst[first]][second_key_lst[second]];
+    function assign_perturbed_currents(perturbed_vector){
+        perturbed_vector.forEach( (val,idx) => {
+        
+        var cur_name =  perturbed_currents_name[idx];
+        env[cur_name] = val;
+        Abubu.setUniformInSolvers(cur_name, env[cur_name],[env.comp1,env.comp2]);
+        console.log(env[cur_name], cur_name);
+    });
+    }
+    assign_perturbed_currents(perturbed_vector);
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){

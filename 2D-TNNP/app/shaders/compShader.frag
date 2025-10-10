@@ -613,11 +613,8 @@ void main() {
  * I_sum
  *------------------------------------------------------------------------
  */
-    float I_sum =  ISumCa + ISumNaK + INaCa ;
-    float eps = 1e-6;
-    if (I_init < -10. && abs(cp.x - 0.1) < 0.1 && abs(cp.y - 0.1) < 0.1) {
-        I_sum += I_init;
-    }
+
+    float I_sum =  ISumCa + ISumNaK + INaCa + I_init;
 
 /*------------------------------------------------------------------------
  * Time integration for membrane potential
