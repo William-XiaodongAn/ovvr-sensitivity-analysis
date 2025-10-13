@@ -760,6 +760,7 @@ function loadWebGL()
                 var voltage = env.voltageProbe.getPixel()[0]; // Membrane voltage at probe
                 if ( env.time >= initial_wait-100 ){
                     current_recorder += ';' + voltage;
+                    /*
                     current_recorder += ';' + current0_rgba[0]+','+
                                         current0_rgba[1]+','+
                                         current0_rgba[2]+','+
@@ -772,12 +773,29 @@ function loadWebGL()
                                         current2_rgba[1]+','+
                                         current2_rgba[2]+','+
                                         current2_rgba[3];
+                    */
                     current_recorder += '\n';
                 }
                 if (env.time > initial_wait +500 && env.time < initial_wait + 2*env.dt +500){
-                    current_recorder = 'voltage;INa,Ito,ICaL,IKs;IpK, INaK, IKr, INaCa;IK1, IbCa, IpCa, IbNa\n' + current_recorder ;
-                    saveCsvFile(current_recorder) ;
-                    env.running = false ;
+                    //current_recorder = 'voltage;INa,Ito,ICaL,IKs;IpK, INaK, IKr, INaCa;IK1, IbCa, IpCa, IbNa\n' + current_recorder ;
+                    var name_download = 'voltage_vector' + first_key_lst[first] + '_epsilon_' + second_key_lst[second] + '_measure_dt_' + (2 * env.frameRate/120 * env.dt) + '.csv';
+                    saveCsvFile(current_recorder,name_download) ;
+                    first += 1;
+                    if (first >= first_key_lst.length){
+                        first = 0 ;
+                        second += 1 ;
+                        if (second >= second_key_lst.length){
+                            env.running = false ;
+                            console.log('All simulations are done!') ;
+                            break ;
+                        }
+                    }
+                    perturbed_vector = perturbed_currents[first_key_lst[first]][second_key_lst[second]];
+                    assign_perturbed_currents(perturbed_vector);
+                    console.log('Next simulation: singular vector idx ' + first_key_lst[first] + ', epsilon = ' + second_key_lst[second]);
+                    env.initialize() ;
+                    nextCornerClickTime = pacePeriod ;
+                    current_recorder = '';
                 }
             }
 
@@ -785,13 +803,14 @@ function loadWebGL()
         }
         requestAnimationFrame(env.render) ;
     }
-    function saveCsvFile(data_to_download) {
+    function saveCsvFile(data_to_download,name_download = '') {
         const blob = new Blob([data_to_download], { type: 'text/csv;charset=utf-8' });
 
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
-
-        const name_download = 'currents_ovvr' + '_APD_step_' + (2 * env.skip * env.dt) + '.csv';
+        if (name_download === '') {
+            name_download = 'currents_ovvr' + '_APD_step_' + (2 * env.frameRate/120 * env.dt) + '.csv';
+        }
 
         link.href = url;
         link.download = name_download;
