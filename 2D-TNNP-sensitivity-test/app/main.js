@@ -10,23 +10,19 @@ define([    'require',
             'shader!vertShader.vert',
             'shader!initShader.frag',
             'shader!compShader.frag',
+            'shader!getCurrentsShader.frag',
             'shader!clickShader.frag',
             'shader!bvltShader.frag',
-            'ComputeGL/ComputeGL',
-            'shader!activateMask.frag',
-            'shader!reduceS1.frag',
-            'shader!reduceS2.frag'
+            'ComputeGL/ComputeGL'
             ],
 function(   require,
             vertShader,
             initShader,
             compShader,
+            getCurrentsShader,
             clickShader,
             bvltShader,
-            ComputeGL,
-            activate_mask_shader,
-            reduceS1,
-            reduceS2
+            ComputeGL
             ){
 "use strict" ;
 
@@ -268,7 +264,7 @@ function Environment(){
 
     this.minVlt     = -100 ;
     this.maxVlt     = 50. ;
-
+    this.I_init     = 0.0 ;
     this.cellType   = 0 ;
 
     /* Display Parameters       */
@@ -389,12 +385,13 @@ function loadWebGL()
     env.srsxr = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;
     env.scurr = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;
 
-    var activate_mask = new ComputeGL.FloatRenderTarget(env.width,env.height) ;
-    var reductionResultS1 = new ComputeGL.FloatRenderTarget(env.width,1) ;
-    var reductionResultS2 = new ComputeGL.FloatRenderTarget(1,1) ;	
-    let Probe = new ComputeGL.Probe(reductionResultS2, { channel: 'r' });
-    let vProbe = new ComputeGL.Probe(env.fvrnk, { channel: 'r', probePosition: [0.8,0.5] });
-    env.FTE = 0. ;
+    env.current0 = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;
+    env.current1 = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;
+    env.current2 = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;  
+    env.fvrnk.pairable = true; 
+    env.current0.pairable = true;
+    env.current1.pairable = true;
+    env.current2.pairable = true;
 /*------------------------------------------------------------------------
  * init solver to initialize all textures
  *------------------------------------------------------------------------
@@ -406,6 +403,12 @@ function loadWebGL()
         this.dfff = { location : 3 , target: _dfff } ;
         this.rsxr = { location : 4 , target: _rsxr } ;
     } ;
+
+    env.pTargets2 = function(_vrnk, _cssr, _mhjx){
+        this.vrit = { location : 0 , target: _vrnk } ;
+        this.cssr = { location : 1 , target: _cssr } ;
+        this.mhjx = { location : 2 , target: _mhjx } ;
+    } ;    
 
     env.finit  = new ComputeGL.Solver( {
         fragmentShader  : initShader.value ,
@@ -443,6 +446,7 @@ function loadWebGL()
         this.inRsxr     = { type : 't', value : _rsxr           } ;
 
         /* -------------- */
+        this.I_init     = { type : 'f', value : env.I_init      } ;
         this.cellType   = { type : 'i', value : env.cellType    } ;
         this.C_m        = { type : 'f', value : env.C_m         } ;
         this.capacitance= { type : 'f', value : env.capacitance } ;
@@ -493,45 +497,18 @@ function loadWebGL()
             env.fmhjx, env.fdfff, env.frsxr 
         ) ,
     } ) ;
-
-/*------------------------------------------------------------------------
- * FTE solver
- *------------------------------------------------------------------------
- */
-    env.count_activated_cells = new ComputeGL.Solver({
-            fragmentShader : activate_mask_shader.value,
-            vertexShader    : vertShader.value,
-            uniforms : {
-                    inTexture : { type : 't', value : env.fvrnk } ,
-                    threshold: { type : 'f', value : 0.3 } ,
-                } ,
-            renderTargets : {
-                    ocolor : { location : 0, target : activate_mask }
-            }
-        } ) ;
-        
-    env.reduceS1 = new ComputeGL.Solver({
-        fragmentShader : reduceS1.value,
+    env.getCurrents = new ComputeGL.Solver( {
+        fragmentShader  : getCurrentsShader.value,
         vertexShader    : vertShader.value,
-        uniforms : { 
-            inTexture : { type : 't', value : activate_mask } ,
-        } ,
-        renderTargets : { 
-            ocolor : { location : 0, target : reductionResultS1 } ,
-        }
+        uniforms        : new env.compUniforms(
+            env.svrnk, env.scssr, 
+            env.smhjx, env.sdfff, env.srsxr  
+        ) ,
+        renderTargets   : new env.pTargets2( 
+            env.current0, env.current1, 
+            env.current2
+        ) ,
     } ) ;
-
-    env.reduceS2 = new ComputeGL.Solver({
-        fragmentShader : reduceS2.value,
-        vertexShader    : vertShader.value,
-        uniforms : { 
-            inTexture : { type : 't', value : reductionResultS1 } ,
-        } ,
-        renderTargets : { 
-            ocolor : { location : 0, target : reductionResultS2 } ,
-        }
-    } ) ;
-
 /*------------------------------------------------------------------------
  * click solver
  *------------------------------------------------------------------------
@@ -644,14 +621,12 @@ function loadWebGL()
         env.time = 0 ;
         env.paceTime = 0 ;
         env.breaked = false ;
-        env.firstPass = false ;
         env.finit.render() ;
         env.sinit.render() ;
         env.plot.init(0) ;
         env.disp.initialize() ;
         env.notBreaked = true ;
         refreshDisplay() ;
-        env.FTE = 1.0 ;
     }
 
 /*-------------------------------------------------------------------------
@@ -682,84 +657,170 @@ function loadWebGL()
  * rendering the program ;
  *------------------------------------------------------------------------
  */
-    env.firstPass = false;
-    env.initialBreak = function(){
-        if (!env.firstPass && vProbe.get() > 0 ){
-            env.firstPass = true ;
-        }
-        if (env.firstPass && vProbe.get() < -20 ){
-            if (env.notBreaked && env.vltBreak     ){
-                env.breakVltNow() ;
-            }            
-        }
-    }
-    function saveCsvFile(data) {
-        var blob = new Blob([data], { type: 'text/csv;charset=utf-8;' });
-        var url = URL.createObjectURL(blob);
+    // Create probes for reading texture values (all 4 channels)
+    env.voltageProbe = new ComputeGL.Probe(env.fvrnk, {
+        channel: 'r',
+        probePosition: [0.5, 0.5]
+    });
+    env.current0Probe = new ComputeGL.Probe(env.current0, {
+        channel: 'r',
+        probePosition: [0.5, 0.5]
+    });
+    
+    env.current1Probe = new ComputeGL.Probe(env.current1, {
+        channel: 'r', 
+        probePosition: [0.5, 0.5]
+    });
+    
+    env.current2Probe = new ComputeGL.Probe(env.current2, {
+        channel: 'r', 
+        probePosition: [0.5, 0.5]
+    });
+    env.I_init = 0. ;
+    var initial_wait = 20000; // 20s
+    var pacePeriod = 1000; // 1s
+    var ending_time = initial_wait + pacePeriod;
+    var pace_intensity = 40;
+    var pace_position = [0.9, 0.9];
+    var record_position = [0.5,0.5];
+    var record_position_x = record_position[0];
+    var record_position_y = record_position[1];
+    var current_recorder
+    var initialized = false ;
+    var nextCornerClickTime = pacePeriod ;
+    env.fireCornerClick = function(){
+        click.uniforms.clickPosition.value =  pace_position;
+        click.render() ;
+        clickCopy.render() ;
+    }    
+    /*
+    this.C_Na        =   1.0 ;
+    this.C_NaCa      =   1.0 ;
+    this.C_to        =   1.0 ;
+    this.C_CaL       =   1.0 ;
+    this.C_Kr        =   1.0 ;
+    this.C_Ks        =   1.0 ;
+    this.C_K1        =   1.0 ;
+    this.C_NaK       =   1.0 ;
+    this.C_bNa       =   1.0 ;
+    this.C_pK        =   1.0 ;
+    this.C_bCa       =   1.0 ;
+    this.C_pCa       =   1.0 ;
+    this.C_leak      =   1.0 ;
+    this.C_up        =   1.0 ;
+    this.C_rel       =   1.0 ;
+    this.C_xfer      =   1.0 ;*/
 
-        var link = document.createElement('a');
-        link.setAttribute('href', url);
-
-        var name_download = 'sample_8*8.csv';
-        link.setAttribute('download', name_download);
-
-        document.body.appendChild(link);
-        link.click();
-
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+    var first_key_lst = ["0","1","2","3","4","5","6","7","8","9","10","11"]; // singular vector idx
+    var second_key_lst = ["-0.5","-0.2","0.0","0.2","0.5"]; // epsilon values
+    var first = 0;
+    var second = 0;
+    var perturbed_vector = perturbed_currents[first_key_lst[first]][second_key_lst[second]];
+    function assign_perturbed_currents(perturbed_vector){
+        perturbed_vector.forEach( (val,idx) => {
+        
+        var cur_name =  perturbed_currents_name[idx];
+        env[cur_name] = val;
+        Abubu.setUniformInSolvers(cur_name, env[cur_name],[env.comp1,env.comp2]);
+        console.log(env[cur_name], cur_name);
+    });
     }
-    env.NaList = [];
-    env.NaListIdx = 0;
-    for (let x = 0; x <= 20; x += 0.1) {
-        env.NaList.push(x);
-    }
-    env.changeNa = function(newC_Na) {
-        env.C_Na = newC_Na;
-        ComputeGL.setUniformInSolvers('C_Na', env.C_Na, [env.comp1, env.comp2]);
-    }
-    env.NaData = '';
+    assign_perturbed_currents(perturbed_vector);
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
-                if (env.time >= 10000 || (env.time > 1000 && env.FTE <= 0.05)) {
-                    console.log(env.FTE)
-                    env.NaData += env.C_Na.toFixed(2) + ',' + env.time.toFixed(2) + '\n';
-                    env.initialize();
-                    env.changeNa( env.NaList[env.NaListIdx] ) ;
-                    env.NaListIdx += 1;
-                    if (env.NaListIdx >= env.NaList.length) {
-                        env.running = false;
-                        saveCsvFile(env.NaData);
-                        break;
-                    }
-                }
-                
-
                 env.comp1.render() ;
                 env.comp2.render() ;
-                env.count_activated_cells.render() ;
-                env.reduceS1.render() ;
-                env.reduceS2.render() ;  
-                env.FTE = Probe.get() ;
-
-
+                env.getCurrents.render() ; // Render current values
                 env.time += 2.0*env.dt ;
                 env.paceTime += 2.0*env.dt ;
                 stats.update();
-                stats.update() ;
                 env.plot.update(env.time) ;
                 env.disp.updateTipt() ;
-            }
-            if (env.notBreaked){
-                env.initialBreak() ;
+
+                if (env.time < ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
+                    env.I_init = -40 ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;
+                    console.log(env.I_init)
+                    initialized = true ;
+                }
+                if (initialized === true && env.time > nextCornerClickTime + 1){
+                    env.I_init = 0 ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;   
+                    console.log(env.I_init)
+                    initialized = false ;
+                }      
+                if ( env.time > nextCornerClickTime + 1 ){
+                    nextCornerClickTime += pacePeriod ;
+                }
+                // Read all 4 channels (RGBA) from current textures
+                var current0_rgba = env.current0Probe.getPixel(); // Float32Array[4]
+                var current1_rgba = env.current1Probe.getPixel(); // Float32Array[4]
+                var current2_rgba = env.current2Probe.getPixel(); // Float32Array[4]
+                var voltage = env.voltageProbe.getPixel()[0]; // Membrane voltage at probe
+                if ( env.time >= initial_wait-100 ){
+                    current_recorder += ';' + voltage;
+                    /*
+                    current_recorder += ';' + current0_rgba[0]+','+
+                                        current0_rgba[1]+','+
+                                        current0_rgba[2]+','+
+                                        current0_rgba[3];
+                    current_recorder += ';' + current1_rgba[0]+','+
+                                        current1_rgba[1]+','+
+                                        current1_rgba[2]+','+
+                                        current1_rgba[3];
+                    current_recorder += ';' + current2_rgba[0] +','+
+                                        current2_rgba[1]+','+
+                                        current2_rgba[2]+','+
+                                        current2_rgba[3];
+                    */
+                    current_recorder += '\n';
+                }
+                if (env.time > initial_wait +500 && env.time < initial_wait + 2*env.dt +500){
+                    //current_recorder = 'voltage;INa,Ito,ICaL,IKs;IpK, INaK, IKr, INaCa;IK1, IbCa, IpCa, IbNa\n' + current_recorder ;
+                    var name_download = 'voltage_vector' + first_key_lst[first] + '_epsilon_' + second_key_lst[second] + '_measure_dt_' + (2 * env.frameRate/120 * env.dt) + '.csv';
+                    saveCsvFile(current_recorder,name_download) ;
+                    first += 1;
+                    if (first >= first_key_lst.length){
+                        first = 0 ;
+                        second += 1 ;
+                        if (second >= second_key_lst.length){
+                            env.running = false ;
+                            console.log('All simulations are done!') ;
+                            break ;
+                        }
+                    }
+                    perturbed_vector = perturbed_currents[first_key_lst[first]][second_key_lst[second]];
+                    assign_perturbed_currents(perturbed_vector);
+                    console.log('Next simulation: singular vector idx ' + first_key_lst[first] + ', epsilon = ' + second_key_lst[second]);
+                    env.initialize() ;
+                    nextCornerClickTime = pacePeriod ;
+                    current_recorder = '';
+                }
             }
 
             refreshDisplay();
         }
         requestAnimationFrame(env.render) ;
     }
+    function saveCsvFile(data_to_download,name_download = '') {
+        const blob = new Blob([data_to_download], { type: 'text/csv;charset=utf-8' });
 
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        if (name_download === '') {
+            name_download = 'currents_ovvr' + '_APD_step_' + (2 * env.frameRate/120 * env.dt) + '.csv';
+        }
+
+        link.href = url;
+        link.download = name_download;
+
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+
+        URL.revokeObjectURL(url); // Cleanup
+    }
 /*------------------------------------------------------------------------
  * add environment to document
  *------------------------------------------------------------------------
