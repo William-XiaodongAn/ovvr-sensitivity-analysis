@@ -341,8 +341,6 @@ function Environment(){
         }
         ComputeGL.saveCanvas( 'canvas_1',
         {
-            number  : this.time ,
-            postfix : '_'+this.colormap ,
             prefix  : prefix,
             format  : 'png'
         } ) ;
@@ -394,6 +392,7 @@ function loadWebGL()
     var reductionResultS2 = new ComputeGL.FloatRenderTarget(1,1) ;	
     let Probe = new ComputeGL.Probe(reductionResultS2, { channel: 'r' });
     let vProbe = new ComputeGL.Probe(env.fvrnk, { channel: 'r', probePosition: [0.8,0.5] });
+    let recordProbe = new ComputeGL.Probe(env.fvrnk, { channel: 'r', probePosition: [0.8,0.8] });
     env.FTE = 0. ;
 /*------------------------------------------------------------------------
  * init solver to initialize all textures
@@ -700,7 +699,7 @@ function loadWebGL()
         var link = document.createElement('a');
         link.setAttribute('href', url);
 
-        var name_download = 'sample_8*8.csv';
+        var name_download = 'result_Na.csv';
         link.setAttribute('download', name_download);
 
         document.body.appendChild(link);
@@ -711,20 +710,27 @@ function loadWebGL()
     }
     env.NaList = [];
     env.NaListIdx = 0;
-    for (let x = 1; x <= 16 ; x += 0.5) {
+    for (let x = 0.1; x <= 7.6 ; x += 0.1) {
         env.NaList.push(x);
     }
     env.changeNa = function(newC_Na) {
         env.C_Na = newC_Na;
         ComputeGL.setUniformInSolvers('C_Na', env.C_Na, [env.comp1, env.comp2]);
     }
-    env.NaData = '';
+    env.NaData = `'step_${env.skip_steps * 2 * env.dt}ms \n'`;
+    env.NaData += env.C_Na.toFixed(2) + '\n';
+    env.plot_indicator = false;
+    env.if_plot = false;
+    env.step = 0;
+    env.skip_steps = 10;
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
-                if (env.time >= 10000 || (env.time > 1000 && env.FTE <= 0.05)) {
-                    console.log(env.FTE)
-                    env.NaData += env.C_Na.toFixed(2) + ',' + env.time.toFixed(2) + '\n';
+                env.step += 1;
+                if (env.time >= 4000) {
+                    env.plot_indicator = false;
+                    env.if_plot = false;
+                    env.NaData +=  '\n' + env.C_Na.toFixed(2) + '\n';
                     env.initialize();
                     env.changeNa( env.NaList[env.NaListIdx] ) ;
                     env.NaListIdx += 1;
@@ -734,14 +740,32 @@ function loadWebGL()
                         break;
                     }
                 }
+
+                // save plot
+                if (env.time >= 1000 && !env.if_plot && !env.plot_indicator && recordProbe.get() < -20 ) {
+                    env.plot_indicator = true;
+                }
+                
+                if (env.time >= 1000 && !env.if_plot && env.plot_indicator && recordProbe.get() >= 0) {
+                    env.plot_indicator = false;
+                    env.if_plot = true;
+                    env.savePlot2DPrefix = `'C_Na_${env.C_Na.toFixed(2)}_time_1000_0.8_0.8'`;
+                    env.savePlot2D();
+                    env.running = true;
+                }
+
+                // save voltage
+                if (env.time >= 1000 && env.step % env.skip_steps == 0) {
+                    env.NaData += recordProbe.get().toFixed(4) + ',';
+                }
                 
 
                 env.comp1.render() ;
                 env.comp2.render() ;
-                env.count_activated_cells.render() ;
-                env.reduceS1.render() ;
-                env.reduceS2.render() ;  
-                env.FTE = Probe.get() ;
+                //env.count_activated_cells.render() ;
+                //env.reduceS1.render() ;
+                //env.reduceS2.render() ;  
+                //env.FTE = Probe.get() ;
 
 
                 env.time += 2.0*env.dt ;
