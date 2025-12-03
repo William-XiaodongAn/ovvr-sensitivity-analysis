@@ -593,7 +593,26 @@ void main() {
     vec2 jj = vec2(0.0,1.0)/size ;    
     
     float gamma = 1./3. ;
+    //periodic boundary condition
 
+    float dVlt2dt = 
+        (1.-gamma)*((   texture(inVrnk,fract(cp+ii)).r
+                    -   2.0*vrnkC.r
+                    +   texture(inVrnk,fract(cp-ii)).r     )*cddx
+                +   (   texture(inVrnk,fract(cp+jj)).r
+                    -   2.0*vrnkC.r
+                    +   texture(inVrnk,fract(cp-jj)).r     )*cddy  )
+
+        +   gamma*0.5*(     texture(inVrnk,fract(cp+ii+jj)).r
+                +   texture(inVrnk,fract(cp+ii-jj)).r
+                +   texture(inVrnk,fract(cp-ii-jj)).r
+                +   texture(inVrnk,fract(cp-ii+jj)).r
+                -   4.0*vrnkC.r               )*(cddx + cddy) ;
+    dVlt2dt *= diffCoef ;
+    
+
+    // Clamp boundary cond
+    /*
     float dVlt2dt = 
         (1.-gamma)*((   texture(inVrnk,cp+ii).r
                     -   2.0*vrnkC.r
@@ -608,7 +627,7 @@ void main() {
                 +   texture(inVrnk,cp-ii+jj).r
                 -   4.0*vrnkC.r               )*(cddx + cddy) ;
     dVlt2dt *= diffCoef ;
-
+    */
 /*------------------------------------------------------------------------
  * I_sum
  *------------------------------------------------------------------------

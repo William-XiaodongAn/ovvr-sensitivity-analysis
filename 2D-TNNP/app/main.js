@@ -288,12 +288,12 @@ function Environment(){
     this.height      =   512 ;
     this.dt          =   1.e-1 ;
     this.cfl         =   1.0 ;
-    this.ds_x        =   12 ;
-    this.ds_y        =   12 ;
-    this.C_Na        =   1.0 ;
+    this.ds_x        =   20 ;//12
+    this.ds_y        =   20 ;//12
+    this.C_Na        =   1. ;
     this.C_NaCa      =   1.0 ;
     this.C_to        =   1.0 ;
-    this.C_CaL       =   1.0 ;
+    this.C_CaL       =   0.8 ;
     this.C_Kr        =   1.0 ;
     this.C_Ks        =   1.0 ;
     this.C_K1        =   1.0 ;
@@ -709,28 +709,28 @@ function loadWebGL()
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
     }
-    env.NaList = [];
-    env.NaListIdx = 0;
-    for (let x = 1; x <= 16 ; x += 0.5) {
-        env.NaList.push(x);
+    env.CaLList = [];
+    env.CaLListIdx = 0;
+    for (let x = 4; x <= 8 ; x += 1) {
+        env.CaLList.push(x*0.1);
     }
-    env.changeNa = function(newC_Na) {
-        env.C_Na = newC_Na;
-        ComputeGL.setUniformInSolvers('C_Na', env.C_Na, [env.comp1, env.comp2]);
+    env.changeCal = function(newC_CaL) {
+        env.C_CaL = newC_CaL;
+        ComputeGL.setUniformInSolvers('C_CaL', env.C_CaL, [env.comp1, env.comp2]);
     }
     env.NaData = '';
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
-                if (env.time >= 10000 || (env.time > 1000 && env.FTE <= 0.05)) {
+                if (env.time >= 1000000 || (env.time > 1000 && env.FTE <= 0.05)) {
                     console.log(env.FTE)
-                    env.NaData += env.C_Na.toFixed(2) + ',' + env.time.toFixed(2) + '\n';
+                    env.CaLData += env.C_CaL.toFixed(2) + ',' + env.time.toFixed(2) + '\n';
                     env.initialize();
-                    env.changeNa( env.NaList[env.NaListIdx] ) ;
-                    env.NaListIdx += 1;
-                    if (env.NaListIdx >= env.NaList.length) {
+                    env.changeCal( env.CaLList[env.CaLListIdx] ) ;
+                    env.CaLListIdx += 1;
+                    if (env.CaLListIdx >= env.CaLList.length) {
                         env.running = false;
-                        saveCsvFile(env.NaData);
+                        saveCsvFile(env.CaLData);
                         break;
                     }
                 }
@@ -738,10 +738,10 @@ function loadWebGL()
 
                 env.comp1.render() ;
                 env.comp2.render() ;
-                env.count_activated_cells.render() ;
-                env.reduceS1.render() ;
-                env.reduceS2.render() ;  
-                env.FTE = Probe.get() ;
+                //env.count_activated_cells.render() ;
+                //env.reduceS1.render() ;
+                //env.reduceS2.render() ;  
+                //env.FTE = Probe.get() ;
 
 
                 env.time += 2.0*env.dt ;
