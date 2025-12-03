@@ -717,12 +717,14 @@ function loadWebGL()
         env.C_Na = newC_Na;
         ComputeGL.setUniformInSolvers('C_Na', env.C_Na, [env.comp1, env.comp2]);
     }
-    env.NaData = `'step_${env.skip_steps * 2 * env.dt}ms \n'`;
-    env.NaData += env.C_Na.toFixed(2) + '\n';
-    env.plot_indicator = false;
     env.if_plot = false;
     env.step = 0;
-    env.skip_steps = 10;
+    env.skip_steps = 1;
+    env.NaData = `step_${env.skip_steps * 2 * env.dt}\n`;
+    env.changeNa( env.NaList[env.NaListIdx] ) ;
+    env.NaListIdx += 1;
+    env.NaData += env.C_Na.toFixed(2) + '\n';
+    env.plot_indicator = false;
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
@@ -750,7 +752,7 @@ function loadWebGL()
                     env.plot_indicator = false;
                     env.if_plot = true;
                     env.savePlot2DPrefix = `'C_Na_${env.C_Na.toFixed(2)}_time_1000_0.8_0.8'`;
-                    env.savePlot2D();
+                    //env.savePlot2D();
                     env.running = true;
                 }
 
