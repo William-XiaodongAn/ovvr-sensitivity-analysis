@@ -737,7 +737,7 @@ function loadWebGL()
 
                 if (env.time >= 20000) {
                     env.initialize();
-                    env.NaData += `${env.C_Na}\n`;
+                    env.NaData += `\n${env.C_Na}\n`;
                     env.changeNa( env.NaList[env.NaListIdx] ) ;
                     env.NaListIdx += 1;
                     if (env.NaListIdx >= env.NaList.length) {
