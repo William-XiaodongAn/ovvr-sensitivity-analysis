@@ -715,7 +715,7 @@ function loadWebGL()
     }
     env.NaList = [];
     env.NaListIdx = 0;
-    for (let x = 7.5; x <= 7.6 ; x += 0.1) {
+    for (let x = 0.1; x <= 7.6 ; x += 0.1) {
         env.NaList.push(x);
     }
     env.changeNa = function(newC_Na) {
