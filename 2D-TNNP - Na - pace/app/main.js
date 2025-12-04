@@ -708,6 +708,11 @@ function loadWebGL()
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
     }
+    function pace(){
+        env.click.setUniform('clickPosition',[0,0]) ;        
+        env.click.render() ;
+        env.clickCopy.render() ;
+    }
     env.NaList = [];
     env.NaListIdx = 0;
     for (let x = 0.1; x <= 7.6 ; x += 0.1) {
@@ -718,14 +723,21 @@ function loadWebGL()
         ComputeGL.setUniformInSolvers('C_Na', env.C_Na, [env.comp1, env.comp2]);
     }
 
+    env.pacing_period = 300;
     env.step = 0;
     env.skip_steps = 10;
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
                 env.step += 1;
-                if (env.time >= 4000) {
+
+                if (env.time % env.pacing_period < 2.0*env.dt ){
+                    pace() ;
+                }
+
+                if (env.time >= 20000) {
                     env.initialize();
+                    env.NaData += `${env.C_Na}\n`;
                     env.changeNa( env.NaList[env.NaListIdx] ) ;
                     env.NaListIdx += 1;
                     if (env.NaListIdx >= env.NaList.length) {
@@ -736,8 +748,8 @@ function loadWebGL()
                 }
 
                 // save voltage
-                if (env.time >= 1000 && env.step % env.skip_steps == 0) {
-                    env.NaData += recordProbe.get().toFixed(4) + ',';
+                if (env.time >= 10000 && env.step % env.skip_steps == 0) {
+                    env.NaData += vProbe.get().toFixed(4) + ',';
                 }
                 
 
