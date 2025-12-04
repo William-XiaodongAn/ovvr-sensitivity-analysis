@@ -715,17 +715,20 @@ function loadWebGL()
     }
     env.NaList = [];
     env.NaListIdx = 0;
-    for (let x = 0.1; x <= 7.6 ; x += 0.1) {
+    for (let x = 7.5; x <= 7.6 ; x += 0.1) {
         env.NaList.push(x);
     }
     env.changeNa = function(newC_Na) {
         env.C_Na = newC_Na;
         ComputeGL.setUniformInSolvers('C_Na', env.C_Na, [env.comp1, env.comp2]);
     }
+    env.NaData = '';
+    env.changeNa( env.NaList[env.NaListIdx] )
+    env.NaListIdx += 1;
 
     env.pacing_period = 300;
     env.step = 0;
-    env.skip_steps = 10;
+    env.skip_steps = 1;
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
