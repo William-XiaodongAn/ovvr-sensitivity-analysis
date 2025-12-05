@@ -726,7 +726,7 @@ function loadWebGL()
     env.changeNa( env.NaList[env.NaListIdx] )
     env.NaListIdx += 1;
 
-    env.pacing_period = 300;
+    env.pacing_period = 1000;
     env.step = 0;
     env.skip_steps = 1;
     env.render = function(){
