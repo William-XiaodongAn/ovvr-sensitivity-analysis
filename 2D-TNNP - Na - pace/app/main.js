@@ -708,27 +708,50 @@ function loadWebGL()
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
     }
+
+    function loadPopulationData() {
+        fetch('./population_params.json')
+            .then(response => {
+                return response.json();
+            })
+            .then(data => {
+                return data; // You can pass this data to other functions
+            })
+            .catch(error => {
+            });
+    }
+
+    let populationParameters = loadPopulationData();
+    let maxId =  Object.keys(populationParameters).length - 1
+    // Step 1: Define a function to transform a single data item
+    function loadParameter(id) {
+        let prefix = '\n_ID' + id + '_';
+        // Skip the 'id' field, as it is not an ion parameter
+        Object.keys(populationParameters[id]).forEach(key => {
+            if (key !== 'id') {
+                env[key] = populationParameters[id][key];
+                ComputeGL.setUniformInSolvers(key, env[key], [env.comp1, env.comp2]);
+                prefix += `${key}:${env[key]}_`;
+            }
+        });
+
+        return prefix + '\n';
+    }
+
     function pace(){
         env.click.setUniform('clickPosition',[0,0]) ;        
         env.click.render() ;
         env.clickCopy.render() ;
     }
-    env.NaList = [];
-    env.NaListIdx = 0;
-    for (let x = 0.1; x <= 7.6 ; x += 0.1) {
-        env.NaList.push(x);
-    }
-    env.changeNa = function(newC_Na) {
-        env.C_Na = newC_Na;
-        ComputeGL.setUniformInSolvers('C_Na', env.C_Na, [env.comp1, env.comp2]);
-    }
-    env.NaData = '';
-    env.changeNa( env.NaList[env.NaListIdx] )
-    env.NaListIdx += 1;
-
-    env.pacing_period = 300;
+    env.data = '';
+    env.pacing_period = 1000;
     env.step = 0;
     env.skip_steps = 1;
+    env.prefix = '';
+    let currentId = 0;
+    env.prefix = loadParameter(currentId);
+    env.data += env.prefix;
+
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
@@ -740,19 +763,13 @@ function loadWebGL()
 
                 if (env.time >= 20000) {
                     env.initialize();
-                    env.NaData += `\n${env.C_Na}\n`;
-                    env.changeNa( env.NaList[env.NaListIdx] ) ;
-                    env.NaListIdx += 1;
-                    if (env.NaListIdx >= env.NaList.length) {
-                        env.running = false;
-                        saveCsvFile(env.NaData);
-                        break;
-                    }
+                    env.data += `\n${env.C_Na}\n`;
                 }
+            }
 
                 // save voltage
-                if (env.time >= 10000 && env.step % env.skip_steps == 0) {
-                    env.NaData += vProbe.get().toFixed(4) + ',';
+                if (env.time >= 10000) {
+                    env.data += vProbe.get().toFixed(4) + ',';
                 }
                 
 
