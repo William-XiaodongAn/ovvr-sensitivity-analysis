@@ -692,15 +692,15 @@ function loadWebGL()
             }            
         }
     }
-    function saveCsvFile(data) {
+    function saveCsvFile(data, filename) {
         var blob = new Blob([data], { type: 'text/csv;charset=utf-8;' });
         var url = URL.createObjectURL(blob);
 
         var link = document.createElement('a');
         link.setAttribute('href', url);
 
-        var name_download = 'result_Na.csv';
-        link.setAttribute('download', name_download);
+        var filename = 'result_Na.csv';
+        link.setAttribute('download', filename);
 
         document.body.appendChild(link);
         link.click();
@@ -723,10 +723,18 @@ function loadWebGL()
 
     let populationParameters = loadPopulationData();
     let maxId =  Object.keys(populationParameters).length - 1
+
+    // Detect all keys, filter out 'id', and join them with an underscore
+    const keyNamesString = Object.keys(data[0])
+                                .filter(key => key !== 'id')
+                                .join("_");
     // Step 1: Define a function to transform a single data item
     function loadParameter(id) {
         let prefix = '\n_ID' + id + '_';
         // Skip the 'id' field, as it is not an ion parameter
+        if (id == -1) {
+            return prefix + '\n';
+        }
         Object.keys(populationParameters[id]).forEach(key => {
             if (key !== 'id') {
                 env[key] = populationParameters[id][key];
@@ -745,30 +753,34 @@ function loadWebGL()
     }
     env.data = '';
     env.pacing_period = 1000;
-    env.step = 0;
-    env.skip_steps = 1;
     env.prefix = '';
-    let currentId = 0;
+    let measureTime = 100000;
+    let currentId = -1;
     env.prefix = loadParameter(currentId);
     env.data += env.prefix;
 
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
-                env.step += 1;
-
                 if (env.time % env.pacing_period < 2.0*env.dt ){
                     pace() ;
                 }
-
-                if (env.time >= 20000) {
+                if (env.time >= measureTime + 10000) {
                     env.initialize();
-                    env.data += `\n${env.C_Na}\n`;
-                }
-            }
+                    
+                    currentId += 1;
+                    if (currentId > maxId) {
+                        saveCsvFile(env.data, 'populationTissue_period_' + env.pacing_period + '_measureTime_' + measureTime + '_' + keyNamesString + '_' + maxId + '.csv');
+                        env.running = false;
+                        break;
+                    }
+                    env.prefix = loadParameter(currentId);
+                    env.data += env.prefix;
 
+                }
+            
                 // save voltage
-                if (env.time >= 10000) {
+                if (env.time >= measureTime) {
                     env.data += vProbe.get().toFixed(4) + ',';
                 }
                 
