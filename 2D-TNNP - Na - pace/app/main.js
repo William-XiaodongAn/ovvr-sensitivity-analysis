@@ -710,24 +710,34 @@ function loadWebGL()
     }
 
     function loadPopulationData() {
-        fetch('./population_params.json')
+        // 1. Return the entire fetch chain (the Promise)
+        return fetch('./population_params.json')
             .then(response => {
+                // Check for HTTP errors
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
                 return response.json();
             })
             .then(data => {
-                return data; // You can pass this data to other functions
+                env.populationParameters = data;
             })
             .catch(error => {
+                console.error('There was a problem with the fetch operation:', error);
+                // Re-throw or return a default value as needed
+                throw error; 
             });
     }
+    loadPopulationData().then(() => {
+        env.maxId =  Object.keys(env.populationParameters).length - 1
 
-    let populationParameters = loadPopulationData();
-    let maxId =  Object.keys(populationParameters).length - 1
+        // Detect all keys, filter out 'id', and join them with an underscore
+        env.keyNamesString = Object.keys(env.populationParameters[0])
+                                    .filter(key => key !== 'id')
+                                    .join("_");
+    });
 
-    // Detect all keys, filter out 'id', and join them with an underscore
-    const keyNamesString = Object.keys(data[0])
-                                .filter(key => key !== 'id')
-                                .join("_");
     // Step 1: Define a function to transform a single data item
     function loadParameter(id) {
         let prefix = '\n_ID' + id + '_';
@@ -735,9 +745,9 @@ function loadWebGL()
         if (id == -1) {
             return prefix + '\n';
         }
-        Object.keys(populationParameters[id]).forEach(key => {
+        Object.keys(env.populationParameters[id]).forEach(key => {
             if (key !== 'id') {
-                env[key] = populationParameters[id][key];
+                env[key] = env.populationParameters[id][key];
                 ComputeGL.setUniformInSolvers(key, env[key], [env.comp1, env.comp2]);
                 prefix += `${key}:${env[key]}_`;
             }
@@ -758,7 +768,6 @@ function loadWebGL()
     let currentId = -1;
     env.prefix = loadParameter(currentId);
     env.data += env.prefix;
-
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
@@ -769,8 +778,8 @@ function loadWebGL()
                     env.initialize();
                     
                     currentId += 1;
-                    if (currentId > maxId) {
-                        saveCsvFile(env.data, 'populationTissue_period_' + env.pacing_period + '_measureTime_' + measureTime + '_' + keyNamesString + '_' + maxId + '.csv');
+                    if (currentId > env.maxId) {
+                        saveCsvFile(env.data, 'populationTissue_period_' + env.pacing_period + '_measureTime_' + measureTime + '_' + env.keyNamesString + '_' + env.maxId + '.csv');
                         env.running = false;
                         break;
                     }
