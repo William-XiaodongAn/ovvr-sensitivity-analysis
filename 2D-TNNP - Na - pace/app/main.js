@@ -708,10 +708,11 @@ function loadWebGL()
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
     }
-
-    function loadPopulationData() {
+    env.para_num = 3 ;
+    env.bin_num = 1000 ;
+    function loadPopulationData(para_num,bin_num) {
         // 1. Return the entire fetch chain (the Promise)
-        return fetch('./population_params.json')
+        return fetch(`./population_params_${para_num}_N_${bin_num}.json`)
             .then(response => {
                 // Check for HTTP errors
                 if (!response.ok) {
@@ -729,7 +730,7 @@ function loadWebGL()
                 throw error; 
             });
     }
-    loadPopulationData().then(() => {
+    loadPopulationData(env.para_num, env.bin_num).then(() => {
         env.maxId =  Object.keys(env.populationParameters).length - 1
 
         // Detect all keys, filter out 'id', and join them with an underscore
