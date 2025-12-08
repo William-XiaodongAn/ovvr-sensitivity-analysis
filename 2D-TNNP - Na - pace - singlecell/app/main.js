@@ -764,6 +764,7 @@ function loadWebGL()
     }
     env.data = '';
     env.pacing_period = 1000;
+    env.initialized = false;
     env.prefix = '';
     let measureTime = 100000;
     let currentId = -1;
@@ -772,9 +773,21 @@ function loadWebGL()
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
-                if (env.time % env.pacing_period < 2.0*env.dt ){
-                    pace() ;
+
+                // the codes changed for single cell
+                if (env.time % env.pacing_period <= 1.0 ){
+                    env.I_init = -40 ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;
+                    env.initialized = true ;
                 }
+
+                if (env.initialized && env.time % env.pacing_period > 1.0 ){
+                    env.I_init = 0.0 ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;
+                    env.initialized = false ;
+                }
+                // the codes changed for single cell
+
                 if (env.time >= measureTime + 10000) {
                     env.initialize();
                     
