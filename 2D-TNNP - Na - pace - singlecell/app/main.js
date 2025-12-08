@@ -268,6 +268,7 @@ function Environment(){
 
     this.minVlt     = -100 ;
     this.maxVlt     = 50. ;
+    this.I_init     = 0.0 ;
 
     this.cellType   = 0 ;
 
@@ -386,6 +387,7 @@ function loadWebGL()
     env.frsxr = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;
     env.srsxr = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;
     env.scurr = new ComputeGL.FloatRenderTarget( env.width, env.height ) ;
+    env.fvrnk.pairable = true ;
 
     var activate_mask = new ComputeGL.FloatRenderTarget(env.width,env.height) ;
     var reductionResultS1 = new ComputeGL.FloatRenderTarget(env.width,1) ;
@@ -442,6 +444,7 @@ function loadWebGL()
         this.inRsxr     = { type : 't', value : _rsxr           } ;
 
         /* -------------- */
+        this.I_init     = { type : 'f', value : env.I_init      } ;
         this.cellType   = { type : 'i', value : env.cellType    } ;
         this.C_m        = { type : 'f', value : env.C_m         } ;
         this.capacitance= { type : 'f', value : env.capacitance } ;
