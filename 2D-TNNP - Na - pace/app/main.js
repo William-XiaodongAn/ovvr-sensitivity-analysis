@@ -699,7 +699,6 @@ function loadWebGL()
         var link = document.createElement('a');
         link.setAttribute('href', url);
 
-        var filename = 'result_Na.csv';
         link.setAttribute('download', filename);
 
         document.body.appendChild(link);
@@ -763,7 +762,7 @@ function loadWebGL()
         env.clickCopy.render() ;
     }
     env.data = '';
-    env.pacing_period = 1000;
+    env.pacing_period = 500;
     env.prefix = '';
     let measureTime = 100000;
     let currentId = -1;

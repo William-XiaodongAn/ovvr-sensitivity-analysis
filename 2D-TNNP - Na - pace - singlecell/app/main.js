@@ -766,7 +766,7 @@ function loadWebGL()
         env.clickCopy.render() ;
     }
     env.data = '';
-    env.pacing_period = 1000;
+    env.pacing_period = 500;
     env.initialized = false;
     env.prefix = '';
     let measureTime = 100000;
@@ -796,7 +796,7 @@ function loadWebGL()
                     
                     currentId += 1;
                     if (currentId > env.maxId) {
-                        saveCsvFile(env.data, 'populationTissue_period_' + env.pacing_period + '_measureTime_' + measureTime + '_' + env.keyNamesString + '_' + env.maxId + '.csv');
+                        saveCsvFile(env.data, 'populationCell_period_' + env.pacing_period + '_measureTime_' + measureTime + '_' + env.keyNamesString + '_' + env.maxId + '.csv');
                         env.running = false;
                         break;
                     }
