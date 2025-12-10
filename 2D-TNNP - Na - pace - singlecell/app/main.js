@@ -702,7 +702,6 @@ function loadWebGL()
         var link = document.createElement('a');
         link.setAttribute('href', url);
 
-        var filename = 'result_Na.csv';
         link.setAttribute('download', filename);
 
         document.body.appendChild(link);
