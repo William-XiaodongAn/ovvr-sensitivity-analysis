@@ -46,7 +46,9 @@ uniform float   C_CaL,
                 C_to, 
                 C_Kr, 
                 C_Ks, 
-                C_pK ;
+                C_pK,
+                kNaCa,
+                pKNa ;
 /*------------------------------------------------------------------------
  * It turns out for my current graphics card the maximum number of 
  * drawBuffers is limited to 8 
@@ -93,13 +95,19 @@ void main() {
        Gks=0.098 ; Gto=0.294 ;
     }
 
-    float Gkr=0.153;    float pKNa=0.03;        
+    float Gkr=0.153;    
+    float pKNa=0.03;  
+    // added line
+    pKNa = pKNa ;      
     float GK1=5.405;    float alphanaca=2.5;
     float GNa=14.838;   float GbNa=0.00029;     
     float KmK=1.0;      float KmNa=40.0;
     float knak=2.724;   float GCaL=0.00003980;  
     float GbCa=0.000592;
-    float knaca=1000.;  float KmNai=87.5;       
+    float knaca=1000.;
+    // added line
+    knaca = kNaCa ;
+    float KmNai=87.5;       
     float KmCa=1.38;    float ksat=0.1;
     float n=0.35;       float GpCa=0.1238;      
     float KpCa=0.0005;  float GpK=0.0146;

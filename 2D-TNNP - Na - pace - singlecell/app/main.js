@@ -287,7 +287,7 @@ function Environment(){
     /* Solver Parameters        */
     this.width       =   512 ;
     this.height      =   512 ;
-    this.dt          =   1.e-1 ;
+    this.dt          =   0.01 ; // 0.1
     this.cfl         =   1.0 ;
     this.ds_x        =   12 ;
     this.ds_y        =   12 ;
@@ -307,6 +307,9 @@ function Environment(){
     this.C_up        =   1.0 ;
     this.C_rel       =   1.0 ;
     this.C_xfer      =   1.0 ;
+    // added lines
+    this.kNaCa      =   1000 ;
+    this.pKNa      =   0.03 ;  
 
     /* Autopace                 */
     this.pacing      = false ;
@@ -468,7 +471,9 @@ function loadWebGL()
         this.C_up       = { type : 'f', value : env.C_up        } ;
         this.C_rel      = { type : 'f', value : env.C_rel       } ;
         this.C_xfer     = { type : 'f', value : env.C_xfer      } ;
-
+        // added lines
+        this.kNaCa = { type : 'f', value : env.kNaCa      } ;
+        this.pKNa = { type : 'f', value : env.pKNa      } ;
     } ;
 
     env.comp1 = new ComputeGL.Solver( {
@@ -710,8 +715,8 @@ function loadWebGL()
         document.body.removeChild(link);
         URL.revokeObjectURL(url);
     }
-    env.para_num = 3 ;
-    env.bin_num = 100 ;
+    env.para_num = 12 ;
+    env.bin_num = 2500 ;
     function loadPopulationData(para_num,bin_num) {
         // 1. Return the entire fetch chain (the Promise)
         return fetch(`./population_params_${para_num}_N_${bin_num}.json`)
@@ -768,9 +773,9 @@ function loadWebGL()
     env.pacing_period = 500;
     env.initialized = false;
     env.prefix = '';
-    let measureTime = 100000;
-    let currentId = -1;
-    env.prefix = loadParameter(currentId);
+    let measureTime = 40000;
+    env.currentId = -1;
+    env.prefix = loadParameter(env.currentId);
     env.data += env.prefix;
     env.render = function(){
         if (env.running){
@@ -783,23 +788,23 @@ function loadWebGL()
                     env.initialized = true ;
                 }
 
-                if (env.initialized && env.time % env.pacing_period > 1.0 ){
+                if (env.initialized && env.time % env.pacing_period > 1.0 ){ 
                     env.I_init = 0.0 ;
                     Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;
                     env.initialized = false ;
                 }
                 // the codes changed for single cell
 
-                if (env.time >= measureTime + 10000) {
+                if (env.time >= measureTime + 1000) {
                     env.initialize();
                     
-                    currentId += 1;
-                    if (currentId > env.maxId) {
+                    env.currentId += 1;
+                    if (env.currentId > env.maxId) {
                         saveCsvFile(env.data, 'populationCell_period_' + env.pacing_period + '_measureTime_' + measureTime + '_' + env.keyNamesString + '_' + env.maxId + '.csv');
                         env.running = false;
                         break;
                     }
-                    env.prefix = loadParameter(currentId);
+                    env.prefix = loadParameter(env.currentId);
                     env.data += env.prefix;
 
                 }

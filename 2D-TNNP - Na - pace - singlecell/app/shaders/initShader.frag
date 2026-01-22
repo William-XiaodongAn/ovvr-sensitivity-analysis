@@ -124,5 +124,6 @@ void main() {
                 1.0000              /* f_cass           */
         ) ;
     }
+    rsxr = vec4(0.0, 1.0, 0.0, 1.0);
     return ;
 }
