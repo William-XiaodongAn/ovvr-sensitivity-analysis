@@ -286,7 +286,7 @@ function Environment(){
     /* Solver Parameters        */
     this.width       =   512 ;
     this.height      =   512 ;
-    this.dt          =   0.01 ;
+    this.dt          =   0.01 ; //0.1
     this.cfl         =   1.0 ;
     this.ds_x        =   12 ;
     this.ds_y        =   12 ;
@@ -768,7 +768,9 @@ function loadWebGL()
         env.clickCopy.render() ;
     }
     env.data = '';
-    env.pacing_period = 500;
+    env.pacing_period_list = [200,300,400];
+    env.pacing_period_idx = 0;
+    env.pacing_period = env.pacing_period_list[env.pacing_period_idx];
     env.prefix = '';
     let measureTime = 40000;
     env.currentId = -1;
@@ -780,14 +782,21 @@ function loadWebGL()
                 if (env.time % env.pacing_period < 2.0*env.dt ){
                     pace() ;
                 }
+
                 if (env.time >= measureTime + 1000) {
                     env.initialize();
                     
                     env.currentId += 1;
-                    if (env.currentId > 100) { //env.maxId) {
+                    if (env.currentId > 300) { //env.maxId) {
                         saveCsvFile(env.data, 'populationTissue_period_' + env.pacing_period + '_measureTime_' + measureTime + '_' + env.keyNamesString + '_' + env.maxId + '.csv');
-                        env.running = false;
-                        break;
+                        env.data = '';
+                        env.pacing_period_idx += 1;
+                        if (env.pacing_period_idx >= env.pacing_period_list.length) {
+                            env.running = false;
+                            break;
+                        }
+                        env.pacing_period = env.pacing_period_list[env.pacing_period_idx];
+                        env.currentId = -1;
                     }
                     env.prefix = loadParameter(env.currentId);
                     env.data += env.prefix;

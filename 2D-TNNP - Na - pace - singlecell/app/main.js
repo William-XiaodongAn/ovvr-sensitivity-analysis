@@ -770,7 +770,9 @@ function loadWebGL()
         env.clickCopy.render() ;
     }
     env.data = '';
-    env.pacing_period = 500;
+    env.pacing_period_list = [200,300,400];
+    env.pacing_period_idx = 0;
+    env.pacing_period = env.pacing_period_list[env.pacing_period_idx];
     env.initialized = false;
     env.prefix = '';
     let measureTime = 40000;
@@ -799,10 +801,16 @@ function loadWebGL()
                     env.initialize();
                     
                     env.currentId += 1;
-                    if (env.currentId > env.maxId) {
+                    if (env.currentId > 300) { //env.maxId) {
                         saveCsvFile(env.data, 'populationCell_period_' + env.pacing_period + '_measureTime_' + measureTime + '_' + env.keyNamesString + '_' + env.maxId + '.csv');
-                        env.running = false;
-                        break;
+                        env.data = '';
+                        env.pacing_period_idx += 1;
+                        if (env.pacing_period_idx >= env.pacing_period_list.length) {
+                            env.running = false;
+                            break;
+                        }
+                        env.pacing_period = env.pacing_period_list[env.pacing_period_idx];
+                        env.currentId = -1;
                     }
                     env.prefix = loadParameter(env.currentId);
                     env.data += env.prefix;
