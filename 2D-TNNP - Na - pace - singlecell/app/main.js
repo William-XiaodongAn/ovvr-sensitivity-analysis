@@ -132,7 +132,7 @@ function createGui(){
             refreshDisplay() ;
         } ) ;
     gui.dspPrmFldr.add( env, 'frameRate').name('Frame Rate Limit')
-        .min(60).max(10000).step(60)
+        .min(60).max(60000).step(60)
 
     gui.dspPrmFldr.add( env, 'timeWindow').name('Signal Window [ms]')
     .onChange( function(){
@@ -770,12 +770,13 @@ function loadWebGL()
         env.clickCopy.render() ;
     }
     env.data = '';
-    env.pacing_period_list = [200,300,400];
+    env.pacing_period_list = [100];
     env.pacing_period_idx = 0;
     env.pacing_period = env.pacing_period_list[env.pacing_period_idx];
     env.initialized = false;
     env.prefix = '';
     let measureTime = 40000;
+    let dataMeasureTime = 400;
     env.currentId = -1;
     env.prefix = loadParameter(env.currentId);
     env.data += env.prefix;
@@ -797,7 +798,7 @@ function loadWebGL()
                 }
                 // the codes changed for single cell
 
-                if (env.time >= measureTime + 1000) {
+                if (env.time >= measureTime + dataMeasureTime) {
                     env.initialize();
                     
                     env.currentId += 1;
@@ -818,7 +819,7 @@ function loadWebGL()
                 }
             
                 // save voltage
-                if (env.time >= measureTime) {
+                if (env.time >= measureTime && env.time < measureTime + dataMeasureTime) {
                     env.data += vProbe.get().toFixed(4) + ',';
                 }
                 

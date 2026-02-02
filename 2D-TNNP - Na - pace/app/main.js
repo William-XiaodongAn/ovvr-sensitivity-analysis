@@ -768,11 +768,12 @@ function loadWebGL()
         env.clickCopy.render() ;
     }
     env.data = '';
-    env.pacing_period_list = [200,300,400];
+    env.pacing_period_list = [100];
     env.pacing_period_idx = 0;
     env.pacing_period = env.pacing_period_list[env.pacing_period_idx];
     env.prefix = '';
     let measureTime = 40000;
+    let dataMeasureTime = 400;
     env.currentId = -1;
     env.prefix = loadParameter(env.currentId);
     env.data += env.prefix;
@@ -783,7 +784,7 @@ function loadWebGL()
                     pace() ;
                 }
 
-                if (env.time >= measureTime + 1000) {
+                if (env.time >= measureTime + dataMeasureTime) {
                     env.initialize();
                     
                     env.currentId += 1;
@@ -804,7 +805,7 @@ function loadWebGL()
                 }
             
                 // save voltage
-                if (env.time >= measureTime) {
+                if (env.time >= measureTime && env.time < measureTime + dataMeasureTime) {
                     env.data += vProbe.get().toFixed(4) + ',';
                 }
                 
