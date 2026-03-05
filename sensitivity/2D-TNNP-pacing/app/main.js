@@ -701,6 +701,7 @@ function loadWebGL()
         click.render() ;
         clickCopy.render() ;
     }    
+    console.log('pacing period = ' + pacePeriod) ;
     env.render = function(){
         if (env.running){
             for(var i=0 ; i< env.frameRate/120 ; i++){
@@ -716,13 +717,13 @@ function loadWebGL()
                 if (env.time < ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
                     env.I_init = -40 ;
                     Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;
-                    console.log(env.I_init)
+                    //console.log(env.I_init)
                     initialized = true ;
                 }
                 if (initialized === true && env.time > nextCornerClickTime + 1){
                     env.I_init = 0 ;
                     Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;   
-                    console.log(env.I_init)
+                    //console.log(env.I_init)
                     initialized = false ;
                 }      
                 if ( env.time > nextCornerClickTime + 1 ){
@@ -766,7 +767,7 @@ function loadWebGL()
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
 
-        const name_download = 'currents_TNNP_pacingPeriod' + pacePeriod + '_APD_step_' + (2 * env.skip * env.dt) + '.csv';
+        const name_download = 'voltage_TNNP_pacingPeriod' + pacePeriod + '_APD_step_' + (2 * env.frameRate/120 * env.dt) + '.csv';
 
         link.href = url;
         link.download = name_download;

@@ -678,7 +678,7 @@ function loadWebGL()
     });
     env.I_init = 0. ;
     var initial_wait = 20000; // 20s
-    var pacePeriod = 1000; // 1s
+    //var pacePeriod = 1000; // 1s
     var ending_time = initial_wait + pacePeriod;
     var pace_intensity = 40;
     var pace_position = [0.9, 0.9];
@@ -741,13 +741,13 @@ function loadWebGL()
                 if (env.time < ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
                     env.I_init = -40 ;
                     Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;
-                    console.log(env.I_init)
+                    //console.log(env.I_init)
                     initialized = true ;
                 }
                 if (initialized === true && env.time > nextCornerClickTime + 1){
                     env.I_init = 0 ;
                     Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;   
-                    console.log(env.I_init)
+                    //console.log(env.I_init)
                     initialized = false ;
                 }      
                 if ( env.time > nextCornerClickTime + 1 ){
@@ -778,7 +778,7 @@ function loadWebGL()
                 }
                 if (env.time > initial_wait +500 && env.time < initial_wait + 2*env.dt +500){
                     //current_recorder = 'voltage;INa,Ito,ICaL,IKs;IpK, INaK, IKr, INaCa;IK1, IbCa, IpCa, IbNa\n' + current_recorder ;
-                    var name_download = 'voltage_vector' + first_key_lst[first] + '_epsilon_' + second_key_lst[second] + '_measure_dt_' + (2 * env.frameRate/120 * env.dt) + '.csv';
+                    var name_download = 'voltage_vector' + first_key_lst[first] + '_epsilon_' + second_key_lst[second] + '_pacingPeriod_' + pacePeriod + '.csv';
                     saveCsvFile(current_recorder,name_download) ;
                     first += 1;
                     if (first >= first_key_lst.length){
@@ -809,7 +809,7 @@ function loadWebGL()
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         if (name_download === '') {
-            name_download = 'currents_ovvr' + '_APD_step_' + (2 * env.frameRate/120 * env.dt) + '.csv';
+            name_download = 'currents_TNNP' + '_APD_step_' + (2 * env.frameRate/120 * env.dt) + '.csv';
         }
 
         link.href = url;
