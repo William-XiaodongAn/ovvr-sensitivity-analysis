@@ -1,18 +1,18 @@
 const drugData = {
     "INa": {
-        "IC50": 15.9,
-        "h": 0.97
+        "IC50": 1220.8,
+        "h": 1.0
     },
     "IKr": {
-        "IC50": 0.86,
-        "h": 1.09
+        "IC50": 174.7,
+        "h": 1.0
     },
     "ICaL": {
-        "IC50": 1.9,
-        "h": 0.69
+        "IC50": 147.1,
+        "h": 1.0
     },
-    "EFTPCmax": 0.155,
-    "drug_name": "Amiodarone I",
+    "EFTPCmax": 0.442,
+    "drug_name": "Sitagliptin",
     "INaL": {
         "IC50": 0.0,
         "h": 1.0
