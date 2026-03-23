@@ -719,9 +719,26 @@ function loadWebGL()
         clickCopy.render() ;
     }    
     console.log('pacing period = ' + pacePeriod) ;
-    
+
     
     // update condunctivities for drugs
+    env.IC50_Na = drugData['INa']['IC50'];
+    env.IC50_Kr = drugData['IKr']['IC50'];
+    env.IC50_CaL = drugData['ICaL']['IC50'];
+    env.IC50_Ks = drugData['IKs']['IC50'];
+    env.IC50_to = drugData['Ito']['IC50'];
+    env.IC50_K1 = drugData['IK1']['IC50'];
+
+    env.h_Na = drugData['INa']['h'];
+    env.h_Kr = drugData['IKr']['h'];
+    env.h_CaL = drugData['ICaL']['h'];
+    env.h_Ks = drugData['IKs']['h'];
+    env.h_to = drugData['Ito']['h'];
+    env.h_K1 = drugData['IK1']['h'];
+
+    env.EFTPC = drugData['EFTPCmax'] ;
+    env.EFTPC_multiplier = 1.0;
+
     env.C_Na = updateConductivity( env.C_Na, env.EFTPC, env.EFTPC_multiplier, env.IC50_Na, env.h_Na ) ;
     Abubu.setUniformInSolvers('C_Na', env.C_Na,[env.comp1,env.comp2]) ;
 
@@ -791,6 +808,7 @@ function loadWebGL()
                 if (env.time > initial_wait +500 && env.time < initial_wait + 2*env.dt +500){
                     current_recorder = 'voltage;INa,Ito,ICaL,IKs;IpK, INaK, IKr, INaCa;IK1, IbCa, IpCa, IbNa\n' + current_recorder ;
                     saveCsvFile(current_recorder) ;
+                    console.log('simulation finished')
                     env.running = false ;
                 }
             }
@@ -805,7 +823,7 @@ function loadWebGL()
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
 
-        const name_download = 'voltage_TNNP_pacingPeriod' + pacePeriod + '_APD_step_' + (2 * env.frameRate/120 * env.dt) + '.csv';
+        const name_download = 'voltage_TNNP_pacingPeriod_' + drugData['drug_name'] + '.csv';
 
         link.href = url;
         link.download = name_download;
@@ -840,7 +858,12 @@ function refreshDisplay(){
 }
 
 function updateConductivity(C,EFTPC,EFTPC_multiplier,IC50,h){
-    var new_C = C * (1 / (1 + (EFTPC * EFTPC_multiplier / IC50)**h) )
+    if (IC50 == 0){
+        var new_C = C;
+    }
+    else{
+        var new_C = C * (1 / (1 + (EFTPC * EFTPC_multiplier / IC50)**h) )
+    }
     return new_C ;
 }
 /*========================================================================
