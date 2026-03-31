@@ -271,7 +271,7 @@ function Environment(){
     this.colormap    =   'rainbowHotSpring';
     this.dispWidth   =   512 ;
     this.dispHeight  =   512 ;
-    this.frameRate   =   2400 ;
+    this.frameRate   =   8000;//2400 ;
     this.timeWindow  =   1000 ;
     this.probeVisiblity = false ;
 
@@ -303,9 +303,25 @@ function Environment(){
     this.C_rel       =   1.0 ;
     this.C_xfer      =   1.0 ;
 
+    this.EFTPC=1.0;
+    this.EFTPC_multiplier=1.0 ;
+
+    this.IC50_Na = 1.0;
+    this.IC50_Kr = 1.0;
+    this.IC50_CaL = 1.0;
+    this.IC50_Ks = 1.0;
+    this.IC50_to = 1.0;
+    this.IC50_K1 = 1.0;
+
+    this.h_Na = 1.0;
+    this.h_Kr = 1.0;
+    this.h_CaL = 1.0;
+    this.h_Ks = 1.0;
+    this.h_to = 1.0;
+    this.h_K1 = 1.0;   
     /* Autopace                 */
     this.pacing      = false ;
-    this.pacePeriod  = 300 ;
+    this.pacePeriod  = 1000 ;
     this.autoPaceRadius= 0.01 ;
 
     /* Solve                    */
@@ -693,23 +709,42 @@ function loadWebGL()
         click.render() ;
         clickCopy.render() ;
     }    
-    /*
-    this.C_Na        =   1.0 ;
-    this.C_NaCa      =   1.0 ;
-    this.C_to        =   1.0 ;
-    this.C_CaL       =   1.0 ;
-    this.C_Kr        =   1.0 ;
-    this.C_Ks        =   1.0 ;
-    this.C_K1        =   1.0 ;
-    this.C_NaK       =   1.0 ;
-    this.C_bNa       =   1.0 ;
-    this.C_pK        =   1.0 ;
-    this.C_bCa       =   1.0 ;
-    this.C_pCa       =   1.0 ;
-    this.C_leak      =   1.0 ;
-    this.C_up        =   1.0 ;
-    this.C_rel       =   1.0 ;
-    this.C_xfer      =   1.0 ;*/
+
+    // update condunctivities for drugs
+    env.IC50_Na = drugData['INa']['IC50'];
+    env.IC50_Kr = drugData['IKr']['IC50'];
+    env.IC50_CaL = drugData['ICaL']['IC50'];
+    env.IC50_Ks = drugData['IKs']['IC50'];
+    env.IC50_to = drugData['Ito']['IC50'];
+    env.IC50_K1 = drugData['IK1']['IC50'];
+
+    env.h_Na = drugData['INa']['h'];
+    env.h_Kr = drugData['IKr']['h'];
+    env.h_CaL = drugData['ICaL']['h'];
+    env.h_Ks = drugData['IKs']['h'];
+    env.h_to = drugData['Ito']['h'];
+    env.h_K1 = drugData['IK1']['h'];
+
+    env.EFTPC = drugData['EFTPCmax'] ;
+    env.EFTPC_multiplier = 1.0;
+
+    env.C_Na = updateConductivity( env.C_Na, env.EFTPC, env.EFTPC_multiplier, env.IC50_Na, env.h_Na ) ;
+    Abubu.setUniformInSolvers('C_Na', env.C_Na,[env.comp1,env.comp2,env.getCurrents]) ;
+
+    env.C_Kr = updateConductivity( env.C_Kr, env.EFTPC, env.EFTPC_multiplier, env.IC50_Kr, env.h_Kr ) ;
+    Abubu.setUniformInSolvers('C_Kr', env.C_Kr,[env.comp1,env.comp2,env.getCurrents]) ;
+
+    env.C_CaL = updateConductivity( env.C_CaL, env.EFTPC, env.EFTPC_multiplier, env.IC50_CaL, env.h_CaL ) ;
+    Abubu.setUniformInSolvers('C_CaL', env.C_CaL,[env.comp1,env.comp2,env.getCurrents]) ;
+
+    env.C_Ks = updateConductivity( env.C_Ks, env.EFTPC, env.EFTPC_multiplier, env.IC50_Ks, env.h_Ks ) ;
+    Abubu.setUniformInSolvers('C_Ks', env.C_Ks,[env.comp1,env.comp2,env.getCurrents]) ;
+
+    env.C_to = updateConductivity( env.C_to, env.EFTPC, env.EFTPC_multiplier, env.IC50_to, env.h_to ) ;
+    Abubu.setUniformInSolvers('C_to', env.C_to,[env.comp1,env.comp2,env.getCurrents]) ;
+
+    env.C_K1 = updateConductivity( env.C_K1, env.EFTPC, env.EFTPC_multiplier, env.IC50_K1, env.h_K1 ) ;
+    Abubu.setUniformInSolvers('C_K1', env.C_K1,[env.comp1,env.comp2,env.getCurrents]) ;
 
     var first_key_lst = ["0","1","2","3","4","5","6","7","8","9","10","11"]; // singular vector idx
     var second_key_lst = ["-0.5","-0.2","0.0","0.2","0.5"]; // epsilon values
@@ -720,8 +755,8 @@ function loadWebGL()
         perturbed_vector.forEach( (val,idx) => {
         
         var cur_name =  perturbed_currents_name[idx];
-        env[cur_name] = val;
-        Abubu.setUniformInSolvers(cur_name, env[cur_name],[env.comp1,env.comp2]);
+        env[cur_name] *= val;
+        Abubu.setUniformInSolvers(cur_name, env[cur_name],[env.comp1,env.comp2,env.getCurrents]);
         console.log(env[cur_name], cur_name);
     });
     }
@@ -734,31 +769,32 @@ function loadWebGL()
                 env.getCurrents.render() ; // Render current values
                 env.time += 2.0*env.dt ;
                 env.paceTime += 2.0*env.dt ;
-                stats.update();
-                env.plot.update(env.time) ;
-                env.disp.updateTipt() ;
+                //stats.update(); // used as a timer to check the time step
+                //env.plot.update(env.time) ; 
+                //env.disp.updateTipt() ;
 
                 if (env.time < ending_time && env.time >= nextCornerClickTime && env.time <= nextCornerClickTime + 1){
                     env.I_init = -40 ;
-                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2,env.getCurrents]) ;
                     //console.log(env.I_init)
                     initialized = true ;
                 }
                 if (initialized === true && env.time > nextCornerClickTime + 1){
                     env.I_init = 0 ;
-                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2]) ;   
+                    Abubu.setUniformInSolvers('I_init', env.I_init,[env.comp1,env.comp2,env.getCurrents]) ;   
                     //console.log(env.I_init)
                     initialized = false ;
                 }      
                 if ( env.time > nextCornerClickTime + 1 ){
                     nextCornerClickTime += pacePeriod ;
                 }
-                // Read all 4 channels (RGBA) from current textures
-                var current0_rgba = env.current0Probe.getPixel(); // Float32Array[4]
-                var current1_rgba = env.current1Probe.getPixel(); // Float32Array[4]
-                var current2_rgba = env.current2Probe.getPixel(); // Float32Array[4]
-                var voltage = env.voltageProbe.getPixel()[0]; // Membrane voltage at probe
+
                 if ( env.time >= initial_wait-100 ){
+                    // Read all 4 channels (RGBA) from current textures
+                    var current0_rgba = env.current0Probe.getPixel(); // Float32Array[4]
+                    var current1_rgba = env.current1Probe.getPixel(); // Float32Array[4]
+                    var current2_rgba = env.current2Probe.getPixel(); // Float32Array[4]
+                    var voltage = env.voltageProbe.getPixel()[0]; // Membrane voltage at probe
                     current_recorder += ';' + voltage;
                     /*
                     current_recorder += ';' + current0_rgba[0]+','+
@@ -778,7 +814,7 @@ function loadWebGL()
                 }
                 if (env.time > initial_wait +500 && env.time < initial_wait + 2*env.dt +500){
                     //current_recorder = 'voltage;INa,Ito,ICaL,IKs;IpK, INaK, IKr, INaCa;IK1, IbCa, IpCa, IbNa\n' + current_recorder ;
-                    var name_download = 'voltage_vector' + first_key_lst[first] + '_epsilon_' + second_key_lst[second] + '_pacingPeriod_' + pacePeriod + '.csv';
+                    var name_download = 'voltage_vector' + first_key_lst[first] + '_epsilon_' + second_key_lst[second] + '_pacingPeriod_' + pacePeriod + '_drug_name_' + drug_name + '.csv';
                     saveCsvFile(current_recorder,name_download) ;
                     first += 1;
                     if (first >= first_key_lst.length){
@@ -844,6 +880,15 @@ function refreshDisplay(){
     env.plot.render() ;
 }
 
+function updateConductivity(C,EFTPC,EFTPC_multiplier,IC50,h){
+    if (IC50 == 0){
+        var new_C = C;
+    }
+    else{
+        var new_C = C * (1 / (1 + (EFTPC * EFTPC_multiplier / IC50)**h) )
+    }
+    return new_C ;
+}
 /*========================================================================
  * onClick
  *========================================================================

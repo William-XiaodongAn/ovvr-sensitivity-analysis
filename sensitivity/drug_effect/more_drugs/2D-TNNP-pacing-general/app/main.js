@@ -271,7 +271,7 @@ function Environment(){
     this.colormap    =   'rainbowHotSpring';
     this.dispWidth   =   512 ;
     this.dispHeight  =   512 ;
-    this.frameRate   =   2400 ;
+    this.frameRate   =   8000 ;
     this.timeWindow  =   1000 ;
     this.probeVisiblity = false ;
 
@@ -322,7 +322,7 @@ function Environment(){
 
     /* Autopace                 */
     this.pacing      = false ;
-    this.pacePeriod  = 300 ;
+    this.pacePeriod  = 1000 ;
     this.autoPaceRadius= 0.01 ;
 
     /* Solve                    */
@@ -703,7 +703,7 @@ function loadWebGL()
     });
     env.I_init = 0. ;
     var initial_wait = 20000; // 20s
-    var pacePeriod = 300; // 1s
+    var pacePeriod = 1000; // 1s
     var ending_time = initial_wait + pacePeriod;
     var pace_intensity = 40;
     var pace_position = [0.9, 0.9];
@@ -740,22 +740,22 @@ function loadWebGL()
     env.EFTPC_multiplier = 1.0;
 
     env.C_Na = updateConductivity( env.C_Na, env.EFTPC, env.EFTPC_multiplier, env.IC50_Na, env.h_Na ) ;
-    Abubu.setUniformInSolvers('C_Na', env.C_Na,[env.comp1,env.comp2]) ;
+    Abubu.setUniformInSolvers('C_Na', env.C_Na,[env.comp1,env.comp2,env.getCurrents]) ;
 
     env.C_Kr = updateConductivity( env.C_Kr, env.EFTPC, env.EFTPC_multiplier, env.IC50_Kr, env.h_Kr ) ;
-    Abubu.setUniformInSolvers('C_Kr', env.C_Kr,[env.comp1,env.comp2]) ;
+    Abubu.setUniformInSolvers('C_Kr', env.C_Kr,[env.comp1,env.comp2,env.getCurrents]) ;
 
     env.C_CaL = updateConductivity( env.C_CaL, env.EFTPC, env.EFTPC_multiplier, env.IC50_CaL, env.h_CaL ) ;
-    Abubu.setUniformInSolvers('C_CaL', env.C_CaL,[env.comp1,env.comp2]) ;
+    Abubu.setUniformInSolvers('C_CaL', env.C_CaL,[env.comp1,env.comp2,env.getCurrents]) ;
 
     env.C_Ks = updateConductivity( env.C_Ks, env.EFTPC, env.EFTPC_multiplier, env.IC50_Ks, env.h_Ks ) ;
-    Abubu.setUniformInSolvers('C_Ks', env.C_Ks,[env.comp1,env.comp2]) ;
+    Abubu.setUniformInSolvers('C_Ks', env.C_Ks,[env.comp1,env.comp2,env.getCurrents]) ;
 
     env.C_to = updateConductivity( env.C_to, env.EFTPC, env.EFTPC_multiplier, env.IC50_to, env.h_to ) ;
-    Abubu.setUniformInSolvers('C_to', env.C_to,[env.comp1,env.comp2]) ;
+    Abubu.setUniformInSolvers('C_to', env.C_to,[env.comp1,env.comp2,env.getCurrents]) ;
 
     env.C_K1 = updateConductivity( env.C_K1, env.EFTPC, env.EFTPC_multiplier, env.IC50_K1, env.h_K1 ) ;
-    Abubu.setUniformInSolvers('C_K1', env.C_K1,[env.comp1,env.comp2]) ;
+    Abubu.setUniformInSolvers('C_K1', env.C_K1,[env.comp1,env.comp2,env.getCurrents]) ;
 
     env.render = function(){
         if (env.running){
@@ -784,12 +784,13 @@ function loadWebGL()
                 if ( env.time > nextCornerClickTime + 1 ){
                     nextCornerClickTime += pacePeriod ;
                 }
-                // Read all 4 channels (RGBA) from current textures
-                var current0_rgba = env.current0Probe.getPixel(); // Float32Array[4]
-                var current1_rgba = env.current1Probe.getPixel(); // Float32Array[4]
-                var current2_rgba = env.current2Probe.getPixel(); // Float32Array[4]
-                var voltage = env.voltageProbe.getPixel()[0]; // Membrane voltage at probe
+
                 if ( env.time >= initial_wait-100 ){
+                    // Read all 4 channels (RGBA) from current textures
+                    var current0_rgba = env.current0Probe.getPixel(); // Float32Array[4]
+                    var current1_rgba = env.current1Probe.getPixel(); // Float32Array[4]
+                    var current2_rgba = env.current2Probe.getPixel(); // Float32Array[4]
+                    var voltage = env.voltageProbe.getPixel()[0]; // Membrane voltage at probe
                     current_recorder += ';' + voltage;
                     current_recorder += ';' + current0_rgba[0]+','+
                                         current0_rgba[1]+','+
@@ -823,7 +824,7 @@ function loadWebGL()
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
 
-        const name_download = 'voltage_TNNP_pacingPeriod_' + drugData['drug_name'] + '.csv';
+        const name_download = 'voltage_TNNP_pacingPeriod_' + pacePeriod + '_' + drugData['drug_name'] + '.csv';
 
         link.href = url;
         link.download = name_download;
