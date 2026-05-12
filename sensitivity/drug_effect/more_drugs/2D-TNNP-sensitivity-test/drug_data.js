@@ -1,15 +1,15 @@
 const drugData = {
+    "EFTPCmax": 0.003,
+    "drug_name": "test3(none)",
+    "INa": {
+        "IC50": 0.0,
+        "h": 1.0
+    },
     "IKr": {
-        "IC50": 0.009,
+        "IC50": 0.0,
         "h": 1.0
     },
     "ICaL": {
-        "IC50": 0.003,
-        "h": 1.0
-    },
-    "EFTPCmax": 0.003,
-    "drug_name": "test2(verapamil)",
-    "INa": {
         "IC50": 0.0,
         "h": 1.0
     },
