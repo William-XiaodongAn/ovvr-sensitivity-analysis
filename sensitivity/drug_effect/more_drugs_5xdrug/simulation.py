@@ -17,11 +17,21 @@ def update_conductivity(C, EFTPC, EFTPC_multiplier, IC50, h):
         return C
     return C * (1 / (1 + (EFTPC * EFTPC_multiplier / IC50)**h))
 
-def run_tnnp_simulation(drug_name, pacing_period, drug_concentration_multiplier, total_time=None, perturb_multipliers=None):
+def run_tnnp_simulation(
+    drug_name,
+    pacing_period,
+    drug_concentration_multiplier,
+    total_time=None,
+    perturb_multipliers=None,
+    initial_wait=20000,
+    record_pre=100,
+    record_post=500,
+    record_interval=0.1,
+):
     if total_time is None:
-        # Default: simulate enough time, maybe a few pacing periods plus recording time
-        # The JS recorded after 20s initial wait, then a pacing period
-        total_time = 20000 + pacing_period
+        # Match the browser simulation in 2D-TNNP-pacing-general-5xdrug/app/main.js:
+        # it records from initial_wait - 100 ms until initial_wait + 500 ms.
+        total_time = initial_wait + record_post
 
     # Constants
     Ko=5.4; Cao=2.0; Nao=140.0
@@ -35,6 +45,7 @@ def run_tnnp_simulation(drug_name, pacing_period, drug_concentration_multiplier,
     Vleak=0.00036; Vxfer=0.0038
     RR=8314.3; FF=96486.7; TT=310.0
     CAPACITANCE=0.185
+    C_m=1.0
 
     # Cell type specific conductivities (EPI)
     Gks=0.392; Gto=0.294
@@ -99,16 +110,18 @@ def run_tnnp_simulation(drug_name, pacing_period, drug_concentration_multiplier,
         if 'IpCa' in perturb_multipliers: C_pCa *= perturb_multipliers['IpCa']
         if 'IbNa' in perturb_multipliers: C_bNa *= perturb_multipliers['IbNa']
 
-    # Initial state
-    V = -86.2
-    sRR = 1.0; Nai = 7.67; Ki = 138.3
-    sm = 0.0; sh = 0.75; sj = 0.75; sxs = 0.0
-    sd = 0.0; sf = 1.0; sf2 = 1.0; sfcass = 1.0
+    # Initial state from 2D-TNNP-pacing-general-5xdrug/app/shaders/initShader.frag
+    # for env.cellType = EPI.
+    V = -85.46
+    sRR = 0.9891; Nai = 9.293; Ki = 136.2
+    sm = 0.001633; sh = 0.7512; sj = 0.7508; sxs = 0.003214
+    sd = 3.270e-5; sf = 0.9767; sf2 = 0.9995; sfcass = 1.0
     sr = 0.0; ss = 1.0; sxr1 = 0.0; sxr2 = 1.0
-    Cai = 0.00007; CaSS = 0.00007; CaSR = 1.3
+    Cai = 0.0001156; CaSS = 0.0002331; CaSR = 3.432
 
     dt = 0.1
     time_steps = int(total_time / dt)
+    record_stride = max(1, int(round(record_interval / dt)))
     
     # Store history if we need it (the last 500ms like JS, but the problem wants just relative identifiability index)
     # The sensitivity requires full state at different points or currents during the last pacing cycle
@@ -267,7 +280,9 @@ def run_tnnp_simulation(drug_name, pacing_period, drug_concentration_multiplier,
         dNai = -(INa + IbNa + 3. * INaK + 3. * INaCa) * inverseVcF * CAPACITANCE
         Nai += dt * dNai
 
-        dKi = -(I_init + IK1 + Ito + IKr + IKs - 2. * INaK + IpK) * inverseVcF * CAPACITANCE
+        # Match compShader.frag: I_init affects voltage, but the K_i update uses
+        # Istim = 0.0 rather than the pacing current.
+        dKi = -(IK1 + Ito + IKr + IKs - 2. * INaK + IpK) * inverseVcF * CAPACITANCE
         Ki += dt * dKi
 
         kCaSR = maxsr - ((maxsr - minsr) / (1. + (EC / CaSR)**2))
@@ -305,11 +320,15 @@ def run_tnnp_simulation(drug_name, pacing_period, drug_concentration_multiplier,
         I_sum = ISumCa + ISumNaK + INaCa + I_init
 
         # Update Voltage
-        dVlt2dt = -I_sum / CAPACITANCE
+        dVlt2dt = -I_sum / C_m
         V += dVlt2dt * dt
 
-        # Record data in the last pacing window
-        if total_time - pacing_period <= t < total_time:
+        # Record the same probe window as the browser simulation.
+        record_time = t + dt
+        if (
+            initial_wait - record_pre <= record_time < initial_wait + record_post
+            and (step + 1) % record_stride == 0
+        ):
             recorded_time.append(t)
             recorded_voltage.append(V)
             recorded_currents['INa'].append(INa)

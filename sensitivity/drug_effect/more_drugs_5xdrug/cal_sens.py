@@ -1,53 +1,85 @@
 import argparse
 import numpy as np
-import os
-import csv
+import sys
 from simulation import run_tnnp_simulation
 
-def get_currents(drug_name, pacing_period, drug_concentration, epsilon_current=None, epsilon_value=0.0):
-    pass
+CURRENT_NAMES = ['INa', 'Ito', 'ICaL', 'IKs', 'IpK', 'INaK', 'IKr', 'INaCa', 'IK1', 'IbCa', 'IpCa', 'IbNa']
+RECORDED_DT = 0.1
 
-def cal_identifiability(drug_name, pacing_period, drug_concentration):
+class ProgressBar:
+    def __init__(self, total, enabled=True, width=32):
+        self.total = total
+        self.enabled = enabled
+        self.width = width
+        self.current = 0
+        if self.enabled:
+            self.render('starting')
+
+    def update(self, label=''):
+        self.current += 1
+        if self.enabled:
+            self.render(label)
+
+    def skip(self, count, label=''):
+        self.current += count
+        if self.enabled:
+            self.render(label)
+
+    def render(self, label=''):
+        done = min(self.current, self.total)
+        filled = int(self.width * done / self.total)
+        bar = '#' * filled + '-' * (self.width - filled)
+        percent = 100 * done / self.total
+        sys.stderr.write(f'\r[{bar}] {done}/{self.total} {percent:5.1f}% {label}')
+        sys.stderr.flush()
+
+    def close(self):
+        if self.enabled:
+            self.current = self.total
+            self.render('done')
+            sys.stderr.write('\n')
+            sys.stderr.flush()
+
+def get_currents(drug_name, pacing_period, drug_concentration, epsilon_current=None, epsilon_value=0.0):
+    perturb_multipliers = None
+    if epsilon_current is not None:
+        perturb_multipliers = {epsilon_current: 1.0 + epsilon_value}
+
+    _, voltage, currents = run_tnnp_simulation(
+        drug_name,
+        pacing_period,
+        drug_concentration,
+        perturb_multipliers=perturb_multipliers,
+    )
+    return voltage, currents
+
+def run_baseline_pacing_simulation(drug_name, pacing_period, drug_concentration):
+    """First HTML stage: baseline pacing run that records voltage and currents."""
+    _, voltage, currents = run_tnnp_simulation(
+        drug_name,
+        pacing_period,
+        drug_concentration,
+        perturb_multipliers=None,
+    )
+    return np.array(voltage), currents
+
+def run_perturbation_voltage_simulation(drug_name, pacing_period, drug_concentration, perturb_multipliers):
+    """Second HTML stage: separate perturbation run that records voltage only."""
+    _, voltage, _ = run_tnnp_simulation(
+        drug_name,
+        pacing_period,
+        drug_concentration,
+        perturb_multipliers=perturb_multipliers,
+    )
+    return np.array(voltage)
+
+def cal_identifiability(drug_name, pacing_period, drug_concentration, show_progress=False):
     # To calculate relative identifiability index for all currents
-    # Instead of simulating, we read the exact CSVs used by JS if possible, to match exactly.
-    # The reference is generated from JS traces.
-    
-    current_names = ['INa', 'Ito', 'ICaL', 'IKs', 'IpK', 'INaK', 'IKr', 'INaCa', 'IK1', 'IbCa', 'IpCa', 'IbNa']
-    
-    # Check if we can read the baseline simulation from the JS output
-    base_file = f"2D-TNNP-pacing-period-{int(pacing_period)}-5xdrug/voltage_TNNP_pacingPeriod_{int(pacing_period)}_{drug_name}.csv"
-    
-    if os.path.exists(base_file):
-        # Read the exact matrix from JS output
-        data_dict = {name: [] for name in ['voltage'] + current_names}
-        with open(base_file, 'r') as file:
-            header_line = file.readline().strip()
-            # Read rest
-            for line in file:
-                if line.startswith("undefined") or not line.strip():
-                    continue
-                groups = line.strip().split(';')
-                all_vals = []
-                for g in groups:
-                    for v in g.split(','):
-                        if v.strip():
-                            all_vals.append(float(v.strip()))
-                if len(all_vals) >= len(data_dict):
-                    data_dict['voltage'].append(all_vals[0])
-                    # The mapping in JS output:
-                    # 'voltage', 'INa,Ito,ICaL,IKs', 'IpK, INaK, IKr, INaCa', 'IK1, IbCa, IpCa, IbNa'
-                    # The order matches current_names exactly.
-                    for i, name in enumerate(current_names):
-                        data_dict[name].append(all_vals[i+1])
-        
-        for k in data_dict:
-            data_dict[k] = np.array(data_dict[k])
-            
-        v = data_dict['voltage']
-        base_c = data_dict
-    else:
-        # Fallback to python simulation
-        t, v, base_c = run_tnnp_simulation(drug_name, pacing_period, drug_concentration)
+    current_names = CURRENT_NAMES
+
+    progress = ProgressBar(total=1 + 12 * 2, enabled=show_progress)
+    v, base_c = run_baseline_pacing_simulation(drug_name, pacing_period, drug_concentration)
+    progress.update('baseline simulation')
     
     mask = np.array(v) > -100
     
@@ -58,7 +90,7 @@ def cal_identifiability(drug_name, pacing_period, drug_concentration):
     U, S, Vt = np.linalg.svd(matrix, full_matrices=False)
     V = Vt
     
-    def get_APD_from_voltage(voltage,threshhold = 0.4,dt = 0.1):
+    def get_APD_from_voltage(voltage,threshhold = 0.4,dt = RECORDED_DT):
         voltage = np.array(voltage)
         if np.all(voltage < threshhold):
             return [0.0]
@@ -92,11 +124,10 @@ def cal_identifiability(drug_name, pacing_period, drug_concentration):
         return APD
 
     def dvdt_max(voltages):
-        dt = 0.1
-        return np.max(np.gradient(voltages)) / dt
+        return np.max(np.gradient(voltages)) / RECORDED_DT
         
     def H_test(v_star, v_bar):
-        dt = 0.1
+        dt = RECORDED_DT
         apd_star_07 = get_APD_from_voltage(v_star, 0.7, dt)[0]
         apd_bar_07 = get_APD_from_voltage(v_bar, 0.7, dt)[0]
         H1 = abs(apd_star_07 - apd_bar_07) / (abs(apd_star_07) + 1e-9)
@@ -114,31 +145,31 @@ def cal_identifiability(drug_name, pacing_period, drug_concentration):
         
         return H1 + H2 + H3 + H4 + H5
 
-    def get_voltage(vec, epsilon, pacing_period, drug_name):
-        path = f"./data-5xdrug/voltage_vector{vec}_epsilon_{epsilon}_pacingPeriod_{int(pacing_period)}_drug_name_{drug_name}.csv"
-        voltage = []
-        if os.path.exists(path):
-            with open(path) as csv_file:
-                csv_reader = csv.reader(csv_file, delimiter=';')
-                for row in csv_reader:
-                    if row and len(row) > 1 and row[1].strip() != 'NaN':
-                        try:
-                            voltage.append(float(row[1]))
-                        except ValueError:
-                            pass
-        return np.array(voltage)
+    def get_voltage(vec, epsilon):
+        perturb_multipliers = {
+            current_name: 1.0 + epsilon * V[vec][i]
+            for i, current_name in enumerate(current_names)
+        }
+        return run_perturbation_voltage_simulation(
+            drug_name, pacing_period, drug_concentration, perturb_multipliers
+        )
 
-    def calculate_unidentifiable_space(pacing_period, drug_name):
+    def calculate_unidentifiable_space():
         vec_lst = list(range(12))
         epsilon_list = [-0.5, 0.5]
         Delta = 0.25
         output = list(range(12))
         v_star = v
         for vec in vec_lst:
-            for epsilon in epsilon_list:
-                v_bar = get_voltage(vec, epsilon, pacing_period, drug_name)
+            for epsilon_index, epsilon in enumerate(epsilon_list):
+                v_bar = get_voltage(vec, epsilon)
+                progress.update(f'vector {vec}, epsilon {epsilon}')
                 if len(v_bar) == 0:
                     continue
+                # The original step-3 notebook compares perturbed traces as
+                # v_bar[1:], because those files come from the separate
+                # sensitivity HTML simulation.
+                v_bar = v_bar[1:]
                 # Align lengths
                 min_len = min(len(v_star), len(v_bar))
                 if min_len == 0:
@@ -146,35 +177,45 @@ def cal_identifiability(drug_name, pacing_period, drug_concentration):
                 H_value = H_test(v_star[:min_len], v_bar[:min_len])
                 if H_value > Delta:
                     output.remove(vec)
+                    progress.skip(len(epsilon_list) - epsilon_index - 1, f'vector {vec} resolved')
                     break
         return output
 
-    unidentifiable_space = calculate_unidentifiable_space(pacing_period, drug_name)
+    try:
+        unidentifiable_space = calculate_unidentifiable_space()
 
-    def projection_S(v_I):
-        ps = np.zeros_like(v_I)
-        for i in unidentifiable_space:
-            ps += np.inner(v_I, V[i]) / np.inner(V[i], V[i]) * V[i]
-        return ps
-    
-    identifiability = {}
-    for i, current_name in enumerate(current_names):
-        v_I = np.zeros(len(S))
-        v_I[i] = 1.0
-        k = np.linalg.norm(v_I - projection_S(v_I))
-        identifiability[current_name] = k
-        
-    return dict(sorted(identifiability.items(), key=lambda item: item[1], reverse=True))
+        def projection_S(v_I):
+            ps = np.zeros_like(v_I)
+            for i in unidentifiable_space:
+                ps += np.inner(v_I, V[i]) / np.inner(V[i], V[i]) * V[i]
+            return ps
+
+        identifiability = {}
+        for i, current_name in enumerate(current_names):
+            v_I = np.zeros(len(S))
+            v_I[i] = 1.0
+            k = np.linalg.norm(v_I - projection_S(v_I))
+            identifiability[current_name] = k
+
+        return dict(sorted(identifiability.items(), key=lambda item: item[1], reverse=True))
+    finally:
+        progress.close()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Calculate identifiability index for TNNP model currents.')
     parser.add_argument('--Drug', type=str, required=True, help='Name of the drug')
     parser.add_argument('--pacing_period', type=float, required=True, help='Pacing period in ms')
     parser.add_argument('--drug_concentration', type=float, required=True, help='Drug concentration multiplier (EFTPC_multiplier)')
+    parser.add_argument('--no-progress', action='store_true', help='Disable the progress bar')
     
     args = parser.parse_args()
     
-    identifiabilities = cal_identifiability(args.Drug, args.pacing_period, args.drug_concentration)
+    identifiabilities = cal_identifiability(
+        args.Drug,
+        args.pacing_period,
+        args.drug_concentration,
+        show_progress=not args.no_progress,
+    )
     print("Relative Identifiability Index:")
     for current, val in identifiabilities.items():
         print(f"{current}: {val:.4f}")
