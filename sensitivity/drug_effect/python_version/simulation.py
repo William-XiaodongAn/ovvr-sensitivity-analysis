@@ -1,5 +1,7 @@
 import math
 import pickle
+import sys
+import time
 
 import numpy as np
 from scipy.integrate import solve_ivp
@@ -19,6 +21,42 @@ MATLAB_INITIAL_STATE = np.array([
     0.000212791419736, 9.79776167522, -85.4001369649,
     135.733295852,
 ], dtype=float)
+
+
+class _SimulationTimeReporter:
+    def __init__(self, enabled, total_time, interval_seconds=5.0, label='2D simulation'):
+        self.enabled = bool(enabled)
+        self.total_time = float(total_time)
+        self.interval_seconds = max(0.1, float(interval_seconds))
+        self.label = label
+        self.started_at = time.perf_counter()
+        self.next_report_at = self.started_at
+        self.last_t = None
+
+    def update(self, simulation_time, force=False):
+        if not self.enabled:
+            return
+        now = time.perf_counter()
+        if not force and now < self.next_report_at:
+            return
+        self.last_t = float(simulation_time)
+        percent = 100.0 if self.total_time <= 0 else min(100.0, 100.0 * self.last_t / self.total_time)
+        elapsed = now - self.started_at
+        sys.stderr.write(
+            f'\r{self.label}: sim t={self.last_t:.1f}/{self.total_time:.1f} ms '
+            f'({percent:5.1f}%), wall={elapsed:.1f}s'
+        )
+        sys.stderr.flush()
+        self.next_report_at = now + self.interval_seconds
+
+    def finish(self, simulation_time=None):
+        if not self.enabled:
+            return
+        if simulation_time is None:
+            simulation_time = self.last_t if self.last_t is not None else self.total_time
+        self.update(simulation_time, force=True)
+        sys.stderr.write('\n')
+        sys.stderr.flush()
 
 
 def get_drug_data(drug_name):
@@ -1005,6 +1043,8 @@ def run_tnnp_simulation_2d(
     torch_compile=False,
     finite_check_interval=1000,
     prewait_integration_method='BDF',
+    show_time_progress=False,
+    time_progress_interval=5.0,
 ):
     """Run a fixed-step 2D TNNP simulation on [0, 1]^2.
 
@@ -1045,6 +1085,8 @@ def run_tnnp_simulation_2d(
                     torch_compile=torch_compile,
                     finite_check_interval=finite_check_interval,
                     prewait_integration_method=prewait_integration_method,
+                    show_time_progress=show_time_progress,
+                    time_progress_interval=time_progress_interval,
                 )
         except RuntimeError:
             if backend == 'torch':
@@ -1065,6 +1107,8 @@ def run_tnnp_simulation_2d(
 
     if total_time is None:
         total_time = initial_wait + max_activation_wait
+    reporter = _SimulationTimeReporter(show_time_progress, total_time, time_progress_interval, '2D CPU simulation')
+    reporter.update(0.0, force=True)
 
     p = _base_parameters()
     c = _conductance_multipliers(drug_name, drug_concentration_multiplier, perturb_multipliers)
@@ -1090,6 +1134,8 @@ def run_tnnp_simulation_2d(
         prewait_integration_method,
     )
     state = np.broadcast_to(prewait_state, (ny, nx, 19)).copy()
+    current_simulation_time = min(start_step * step_dt, float(total_time))
+    reporter.update(current_simulation_time, force=start_step > 0)
 
     recorded_time = []
     recorded_voltage = []
@@ -1106,6 +1152,8 @@ def run_tnnp_simulation_2d(
 
     for step in range(start_step, num_steps + 1):
         t = min(step * step_dt, total_time)
+        current_simulation_time = t
+        reporter.update(t)
         measured_voltage = float(state[measure_y, measure_x, 17])
 
         if not measuring and t + 1e-9 >= initial_wait:
@@ -1176,6 +1224,7 @@ def run_tnnp_simulation_2d(
         state = next_state
         previous_measured_voltage = measured_voltage
 
+    reporter.finish(current_simulation_time)
     if return_voltage_maps:
         return recorded_time, recorded_voltage, recorded_currents, np.array(recorded_voltage_maps), state.copy()
     return recorded_time, recorded_voltage, recorded_currents
@@ -1208,6 +1257,8 @@ def _run_tnnp_simulation_2d_torch(
     torch_compile=False,
     finite_check_interval=1000,
     prewait_integration_method='BDF',
+    show_time_progress=False,
+    time_progress_interval=5.0,
 ):
     torch = _torch_module()
     if device is None:
@@ -1229,6 +1280,8 @@ def _run_tnnp_simulation_2d_torch(
 
     if total_time is None:
         total_time = initial_wait + max_activation_wait
+    reporter = _SimulationTimeReporter(show_time_progress, total_time, time_progress_interval, f'2D torch simulation ({device})')
+    reporter.update(0.0, force=True)
 
     p = _base_parameters()
     c = _conductance_multipliers(drug_name, drug_concentration_multiplier, perturb_multipliers)
@@ -1258,6 +1311,8 @@ def _run_tnnp_simulation_2d_torch(
     initial_state_tensor = torch.as_tensor(prewait_state, dtype=dtype, device=device)
     state = initial_state_tensor.view(1, 1, 19).expand(ny, nx, 19).clone()
     finite_check_interval = 0 if finite_check_interval is None else int(finite_check_interval)
+    current_simulation_time = min(start_step * step_dt, float(total_time))
+    reporter.update(current_simulation_time, force=start_step > 0)
 
     def advance_fixed_step(current_state, current_i_stim, current_laplacian):
         next_state_local = _torch_rush_larsen_gate_step(torch, current_state, step_dt)
@@ -1293,6 +1348,8 @@ def _run_tnnp_simulation_2d_torch(
     with torch.no_grad():
         for step in range(start_step, num_steps + 1):
             t = min(step * step_dt, total_time)
+            current_simulation_time = t
+            reporter.update(t)
             measured_voltage = float(state[measure_y, measure_x, 17].detach().cpu())
 
             if not measuring and t + 1e-9 >= initial_wait:
@@ -1368,6 +1425,7 @@ def _run_tnnp_simulation_2d_torch(
             state = next_state
             previous_measured_voltage = measured_voltage
 
+    reporter.finish(current_simulation_time)
     if return_voltage_maps:
         return recorded_time, recorded_voltage, recorded_currents, np.array(recorded_voltage_maps), state.detach().cpu().numpy().copy()
     return recorded_time, recorded_voltage, recorded_currents
@@ -1404,6 +1462,8 @@ def generate_tnnp_2d_measurement_gif(
     torch_device=None,
     torch_compile=False,
     prewait_integration_method='BDF',
+    show_time_progress=False,
+    time_progress_interval=5.0,
 ):
     """Generate a GIF of the 2D voltage maps during the measured APD window."""
     if frame_interval <= 0:
@@ -1443,6 +1503,8 @@ def generate_tnnp_2d_measurement_gif(
         torch_device=torch_device,
         torch_compile=torch_compile,
         prewait_integration_method=prewait_integration_method,
+        show_time_progress=show_time_progress,
+        time_progress_interval=time_progress_interval,
     )
     if len(voltage_maps) == 0:
         raise RuntimeError('No 2D frames were recorded for the measurement window')
