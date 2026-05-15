@@ -1185,7 +1185,6 @@ def _run_tnnp_simulation_2d_torch(
         compiled_uses_cuda = True
         compiled_advance_fixed_step = torch.compile(
             advance_fixed_step,
-            mode='reduce-overhead',
             options={'triton.cudagraphs': False},
         )
 
