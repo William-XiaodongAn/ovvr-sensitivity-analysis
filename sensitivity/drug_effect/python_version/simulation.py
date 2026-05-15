@@ -1180,7 +1180,9 @@ def _run_tnnp_simulation_2d_torch(
         return next_state_local
 
     compiled_advance_fixed_step = advance_fixed_step
+    compiled_uses_cuda = False
     if torch_compile and device.type == 'cuda' and hasattr(torch, 'compile'):
+        compiled_uses_cuda = True
         compiled_advance_fixed_step = torch.compile(
             advance_fixed_step,
             mode='reduce-overhead',
@@ -1258,7 +1260,13 @@ def _run_tnnp_simulation_2d_torch(
         )
 
         if dt == step_dt:
-            next_state = compiled_advance_fixed_step(state, i_stim, laplacian)
+            if (
+                compiled_uses_cuda
+                and hasattr(torch, 'compiler')
+                and hasattr(torch.compiler, 'cudagraph_mark_step_begin')
+            ):
+                torch.compiler.cudagraph_mark_step_begin()
+            next_state = compiled_advance_fixed_step(state, i_stim, laplacian).clone()
         else:
             next_state = _torch_rush_larsen_gate_step(torch, state, dt)
             rates = _torch_rhs_with_stimulus_current(torch, next_state, p, c, i_stim)
