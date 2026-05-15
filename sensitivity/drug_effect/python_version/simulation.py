@@ -429,6 +429,54 @@ def _integrate_rush_larsen_forward(rhs, initial_state, total_time, t_eval, dt):
     return np.array(times), np.array(states)
 
 
+def _advance_resting_state_fixed_step(initial_state, p, c, total_time, dt):
+    if total_time <= 0:
+        return np.array(initial_state, dtype=float).copy()
+    if dt <= 0:
+        raise ValueError('Fixed-step integration step must be positive')
+
+    state = np.array(initial_state, dtype=float).copy()
+    num_steps = int(math.ceil(total_time / dt))
+    for step in range(num_steps):
+        t = step * dt
+        step_dt = min(dt, total_time - t)
+        if step_dt <= 0:
+            break
+        state = _rush_larsen_gate_step(state, step_dt)
+        rates = _rhs_with_stimulus_current(state, p, c, 0.0)
+        state[12:19] = state[12:19] + step_dt * rates[12:19]
+        if not np.all(np.isfinite(state)):
+            raise RuntimeError(f'Resting pre-wait integration produced a non-finite state at t={t + step_dt:g} ms')
+    return state
+
+
+def _advance_resting_state(initial_state, p, c, total_time, dt, method='BDF'):
+    if total_time <= 0:
+        return np.array(initial_state, dtype=float).copy()
+
+    method_key = method.lower()
+    if method_key in {'fixed', 'fixed_step', 'rush_larsen_forward', 'rush-larsen-forward'}:
+        return _advance_resting_state_fixed_step(initial_state, p, c, total_time, dt)
+
+    solver_method = {'bdf': 'BDF', 'lsoda': 'LSODA', 'radau': 'Radau'}.get(method_key, method)
+    sol = solve_ivp(
+        lambda t, y: _rhs_with_stimulus_current(y, p, c, 0.0),
+        (0.0, float(total_time)),
+        np.array(initial_state, dtype=float).copy(),
+        method=solver_method,
+        t_eval=np.array([float(total_time)]),
+        rtol=1e-3,
+        atol=1e-6,
+        max_step=min(100.0, float(total_time)),
+    )
+    if not sol.success:
+        raise RuntimeError(f'Resting pre-wait integration failed: {sol.message}')
+    state = sol.y[:, -1].copy()
+    if not np.all(np.isfinite(state)):
+        raise RuntimeError(f'Resting pre-wait integration produced a non-finite state at t={total_time:g} ms')
+    return state
+
+
 def run_tnnp_simulation(
     drug_name,
     pacing_period,
@@ -955,6 +1003,8 @@ def run_tnnp_simulation_2d(
     backend='cpu',
     torch_device=None,
     torch_compile=False,
+    finite_check_interval=1000,
+    prewait_integration_method='BDF',
 ):
     """Run a fixed-step 2D TNNP simulation on [0, 1]^2.
 
@@ -993,6 +1043,8 @@ def run_tnnp_simulation_2d(
                     return_voltage_maps=return_voltage_maps,
                     device=selected_device,
                     torch_compile=torch_compile,
+                    finite_check_interval=finite_check_interval,
+                    prewait_integration_method=prewait_integration_method,
                 )
         except RuntimeError:
             if backend == 'torch':
@@ -1008,6 +1060,8 @@ def run_tnnp_simulation_2d(
         raise ValueError('c_m must be positive')
     if recovery_tolerance < 0:
         raise ValueError('recovery_tolerance must be non-negative')
+    if finite_check_interval is not None and finite_check_interval < 0:
+        raise ValueError('finite_check_interval must be non-negative')
 
     if total_time is None:
         total_time = initial_wait + max_activation_wait
@@ -1021,11 +1075,21 @@ def run_tnnp_simulation_2d(
     if step_dt <= 0:
         raise ValueError('2D integration step must be positive')
 
-    state = np.broadcast_to(np.array(initial_state, dtype=float), (ny, nx, 19)).copy()
     pace_mask = _point_mask(pacemaker_point, pacemaker_radius, nx, ny, 'pacemaker_point')
     measure_y, measure_x = _point_to_index(measurement_point, nx, ny, 'measurement_point')
     dx = 1.0 / nx
     dy = 1.0 / ny
+    num_steps = int(math.ceil(total_time / step_dt))
+    start_step = min(num_steps, int(math.ceil(initial_wait / step_dt - 1e-12))) if initial_wait > 0 else 0
+    prewait_state = _advance_resting_state(
+        initial_state,
+        p,
+        c,
+        min(start_step * step_dt, float(total_time)),
+        step_dt,
+        prewait_integration_method,
+    )
+    state = np.broadcast_to(prewait_state, (ny, nx, 19)).copy()
 
     recorded_time = []
     recorded_voltage = []
@@ -1038,9 +1102,9 @@ def run_tnnp_simulation_2d(
     resting_voltage = None
     peak_voltage = float(state[measure_y, measure_x, 17])
     previous_measured_voltage = float(state[measure_y, measure_x, 17])
-    num_steps = int(math.ceil(total_time / step_dt))
+    finite_check_interval = 0 if finite_check_interval is None else int(finite_check_interval)
 
-    for step in range(num_steps + 1):
+    for step in range(start_step, num_steps + 1):
         t = min(step * step_dt, total_time)
         measured_voltage = float(state[measure_y, measure_x, 17])
 
@@ -1102,7 +1166,12 @@ def run_tnnp_simulation_2d(
                 cell_state[17] += dt * ((1.0 / c_m - 1.0) * rates[17] + diff_coef * laplacian[y, x])
                 next_state[y, x] = cell_state
 
-        if not np.all(np.isfinite(next_state)):
+        should_check_finite = (
+            finite_check_interval == 0
+            or step % finite_check_interval == 0
+            or t + dt >= total_time
+        )
+        if should_check_finite and not np.all(np.isfinite(next_state)):
             raise RuntimeError(f'2D integration produced a non-finite state at t={t + dt:g} ms')
         state = next_state
         previous_measured_voltage = measured_voltage
@@ -1137,6 +1206,8 @@ def _run_tnnp_simulation_2d_torch(
     return_voltage_maps=False,
     device=None,
     torch_compile=False,
+    finite_check_interval=1000,
+    prewait_integration_method='BDF',
 ):
     torch = _torch_module()
     if device is None:
@@ -1153,6 +1224,8 @@ def _run_tnnp_simulation_2d_torch(
         raise ValueError('c_m must be positive')
     if recovery_tolerance < 0:
         raise ValueError('recovery_tolerance must be non-negative')
+    if finite_check_interval is not None and finite_check_interval < 0:
+        raise ValueError('finite_check_interval must be non-negative')
 
     if total_time is None:
         total_time = initial_wait + max_activation_wait
@@ -1166,14 +1239,25 @@ def _run_tnnp_simulation_2d_torch(
     if step_dt <= 0:
         raise ValueError('2D integration step must be positive')
 
-    initial_state_tensor = torch.as_tensor(initial_state, dtype=dtype, device=device)
-    state = initial_state_tensor.view(1, 1, 19).expand(ny, nx, 19).clone()
     pace_mask_np = _point_mask(pacemaker_point, pacemaker_radius, nx, ny, 'pacemaker_point')
-    pace_mask = torch.as_tensor(pace_mask_np, dtype=torch.bool, device=device)
+    pace_mask = torch.as_tensor(pace_mask_np, dtype=dtype, device=device)
     measure_y, measure_x = _point_to_index(measurement_point, nx, ny, 'measurement_point')
     dx = 1.0 / nx
     dy = 1.0 / ny
     laplacian_kernel = _torch_laplacian_kernel(torch, dx, dy, dtype, device)
+    num_steps = int(math.ceil(total_time / step_dt))
+    start_step = min(num_steps, int(math.ceil(initial_wait / step_dt - 1e-12))) if initial_wait > 0 else 0
+    prewait_state = _advance_resting_state(
+        initial_state,
+        p,
+        c,
+        min(start_step * step_dt, float(total_time)),
+        step_dt,
+        prewait_integration_method,
+    )
+    initial_state_tensor = torch.as_tensor(prewait_state, dtype=dtype, device=device)
+    state = initial_state_tensor.view(1, 1, 19).expand(ny, nx, 19).clone()
+    finite_check_interval = 0 if finite_check_interval is None else int(finite_check_interval)
 
     def advance_fixed_step(current_state, current_i_stim, current_laplacian):
         next_state_local = _torch_rush_larsen_gate_step(torch, current_state, step_dt)
@@ -1205,83 +1289,84 @@ def _run_tnnp_simulation_2d_torch(
     resting_voltage = None
     peak_voltage = float(state[measure_y, measure_x, 17].detach().cpu())
     previous_measured_voltage = peak_voltage
-    num_steps = int(math.ceil(total_time / step_dt))
 
-    for step in range(num_steps + 1):
-        t = min(step * step_dt, total_time)
-        measured_voltage = float(state[measure_y, measure_x, 17].detach().cpu())
+    with torch.no_grad():
+        for step in range(start_step, num_steps + 1):
+            t = min(step * step_dt, total_time)
+            measured_voltage = float(state[measure_y, measure_x, 17].detach().cpu())
 
-        if not measuring and t + 1e-9 >= initial_wait:
-            measuring = True
-            resting_voltage = measured_voltage
-            peak_voltage = measured_voltage
+            if not measuring and t + 1e-9 >= initial_wait:
+                measuring = True
+                resting_voltage = measured_voltage
+                peak_voltage = measured_voltage
 
-        if measuring and not activated and previous_measured_voltage < activation_threshold <= measured_voltage:
-            activated = True
+            if measuring and not activated and previous_measured_voltage < activation_threshold <= measured_voltage:
+                activated = True
 
-        if activated:
-            peak_voltage = max(peak_voltage, measured_voltage)
-            if (
-                peak_voltage > activation_threshold
-                and previous_measured_voltage > resting_voltage + recovery_tolerance
-                and measured_voltage <= resting_voltage + recovery_tolerance
-            ):
-                recovered = True
+            if activated:
+                peak_voltage = max(peak_voltage, measured_voltage)
+                if (
+                    peak_voltage > activation_threshold
+                    and previous_measured_voltage > resting_voltage + recovery_tolerance
+                    and measured_voltage <= resting_voltage + recovery_tolerance
+                ):
+                    recovered = True
 
-        while measuring and t + 1e-9 >= next_record_time:
-            measured_state = state[measure_y, measure_x].detach().cpu().numpy().astype(float)
-            measured_currents = _currents_from_state(measured_state, p, c)
-            recorded_time.append(float(next_record_time - initial_wait))
-            recorded_voltage.append(float(measured_state[17]))
-            for name in CURRENT_NAMES:
-                recorded_currents[name].append(measured_currents[name])
-            if return_voltage_maps:
-                recorded_voltage_maps.append(state[:, :, 17].detach().cpu().numpy().copy())
-            next_record_time += record_interval
-
-        if recovered:
-            if not recorded_time or recorded_time[-1] < t - initial_wait:
+            while measuring and t + 1e-9 >= next_record_time:
                 measured_state = state[measure_y, measure_x].detach().cpu().numpy().astype(float)
                 measured_currents = _currents_from_state(measured_state, p, c)
-                recorded_time.append(float(t - initial_wait))
+                recorded_time.append(float(next_record_time - initial_wait))
                 recorded_voltage.append(float(measured_state[17]))
                 for name in CURRENT_NAMES:
                     recorded_currents[name].append(measured_currents[name])
                 if return_voltage_maps:
                     recorded_voltage_maps.append(state[:, :, 17].detach().cpu().numpy().copy())
-            break
+                next_record_time += record_interval
 
-        if t >= total_time:
-            break
+            if recovered:
+                if not recorded_time or recorded_time[-1] < t - initial_wait:
+                    measured_state = state[measure_y, measure_x].detach().cpu().numpy().astype(float)
+                    measured_currents = _currents_from_state(measured_state, p, c)
+                    recorded_time.append(float(t - initial_wait))
+                    recorded_voltage.append(float(measured_state[17]))
+                    for name in CURRENT_NAMES:
+                        recorded_currents[name].append(measured_currents[name])
+                    if return_voltage_maps:
+                        recorded_voltage_maps.append(state[:, :, 17].detach().cpu().numpy().copy())
+                break
 
-        dt = min(step_dt, total_time - t)
-        old_voltage = state[:, :, 17]
-        laplacian = _torch_html_2d_laplacian(torch, old_voltage, dx, dy, kernel=laplacian_kernel)
-        stimulus = _measurement_window_stimulus(t, initial_wait, pacing_period, p)
-        i_stim = torch.where(
-            pace_mask,
-            torch.as_tensor(stimulus, dtype=dtype, device=device),
-            torch.zeros((), dtype=dtype, device=device),
-        )
+            if t >= total_time:
+                break
 
-        if dt == step_dt:
-            if (
-                compiled_uses_cuda
-                and hasattr(torch, 'compiler')
-                and hasattr(torch.compiler, 'cudagraph_mark_step_begin')
-            ):
-                torch.compiler.cudagraph_mark_step_begin()
-            next_state = compiled_advance_fixed_step(state, i_stim, laplacian).clone()
-        else:
-            next_state = _torch_rush_larsen_gate_step(torch, state, dt)
-            rates = _torch_rhs_with_stimulus_current(torch, next_state, p, c, i_stim)
-            next_state[..., 12:19] = next_state[..., 12:19] + dt * rates[..., 12:19]
-            next_state[..., 17] = next_state[..., 17] + dt * ((1.0 / c_m - 1.0) * rates[..., 17] + diff_coef * laplacian)
+            dt = min(step_dt, total_time - t)
+            old_voltage = state[:, :, 17]
+            laplacian = _torch_html_2d_laplacian(torch, old_voltage, dx, dy, kernel=laplacian_kernel)
+            stimulus = _measurement_window_stimulus(t, initial_wait, pacing_period, p)
+            i_stim = pace_mask * stimulus
 
-        if not bool(torch.isfinite(next_state).all().detach().cpu()):
-            raise RuntimeError(f'PyTorch 2D integration produced a non-finite state at t={t + dt:g} ms')
-        state = next_state
-        previous_measured_voltage = measured_voltage
+            if dt == step_dt:
+                if (
+                    compiled_uses_cuda
+                    and hasattr(torch, 'compiler')
+                    and hasattr(torch.compiler, 'cudagraph_mark_step_begin')
+                ):
+                    torch.compiler.cudagraph_mark_step_begin()
+                next_state = compiled_advance_fixed_step(state, i_stim, laplacian).clone()
+            else:
+                next_state = _torch_rush_larsen_gate_step(torch, state, dt)
+                rates = _torch_rhs_with_stimulus_current(torch, next_state, p, c, i_stim)
+                next_state[..., 12:19] = next_state[..., 12:19] + dt * rates[..., 12:19]
+                next_state[..., 17] = next_state[..., 17] + dt * ((1.0 / c_m - 1.0) * rates[..., 17] + diff_coef * laplacian)
+
+            should_check_finite = (
+                finite_check_interval == 0
+                or step % finite_check_interval == 0
+                or t + dt >= total_time
+            )
+            if should_check_finite and not bool(torch.isfinite(next_state).all().detach().cpu()):
+                raise RuntimeError(f'PyTorch 2D integration produced a non-finite state at t={t + dt:g} ms')
+            state = next_state
+            previous_measured_voltage = measured_voltage
 
     if return_voltage_maps:
         return recorded_time, recorded_voltage, recorded_currents, np.array(recorded_voltage_maps), state.detach().cpu().numpy().copy()
@@ -1318,6 +1403,7 @@ def generate_tnnp_2d_measurement_gif(
     backend='auto',
     torch_device=None,
     torch_compile=False,
+    prewait_integration_method='BDF',
 ):
     """Generate a GIF of the 2D voltage maps during the measured APD window."""
     if frame_interval <= 0:
@@ -1356,6 +1442,7 @@ def generate_tnnp_2d_measurement_gif(
         backend=backend,
         torch_device=torch_device,
         torch_compile=torch_compile,
+        prewait_integration_method=prewait_integration_method,
     )
     if len(voltage_maps) == 0:
         raise RuntimeError('No 2D frames were recorded for the measurement window')

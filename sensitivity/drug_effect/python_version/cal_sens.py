@@ -4,6 +4,7 @@ import os
 import numpy as np
 import re
 import sys
+import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from scipy.io import loadmat
 from simulation import (
@@ -51,6 +52,22 @@ class ProgressBar:
             self.render('done')
             sys.stderr.write('\n')
             sys.stderr.flush()
+
+def describe_run(dimension, integration_method, integration_step, initial_wait, simulation_kwargs):
+    if dimension != '2d':
+        return f'1d method={integration_method} dt={integration_step} initial_wait={initial_wait:g}ms'
+    simulation_kwargs = {} if simulation_kwargs is None else simulation_kwargs
+    nx = simulation_kwargs.get('nx', '?')
+    ny = simulation_kwargs.get('ny', '?')
+    backend = simulation_kwargs.get('backend', 'cpu')
+    device = simulation_kwargs.get('torch_device') or 'auto'
+    pacer = simulation_kwargs.get('pacemaker_point', '?')
+    measure = simulation_kwargs.get('measurement_point', '?')
+    radius = simulation_kwargs.get('pacemaker_radius', '?')
+    return (
+        f'2d {nx}x{ny} backend={backend} device={device} dt={integration_step} '
+        f'initial_wait={initial_wait:g}ms pacer={pacer} radius={radius} measure={measure}'
+    )
 
 def load_initial_state_mat(path):
     state = np.asarray(loadmat(path)['states']).ravel()
@@ -346,7 +363,10 @@ def cal_identifiability(
 
     progress = ProgressBar(total=1 + 12 * 2, enabled=show_progress)
     if show_progress:
-        progress.render('baseline simulation running')
+        sys.stderr.write(f'\nRun: {describe_run(dimension, integration_method, integration_step, initial_wait, simulation_kwargs)}\n')
+        sys.stderr.write('Baseline simulation started...\n')
+        sys.stderr.flush()
+    baseline_start = time.perf_counter()
     t, v, base_c = run_baseline_pacing_simulation(
         drug_name,
         pacing_period,
@@ -360,7 +380,8 @@ def cal_identifiability(
         record_pre=record_pre,
         record_post=record_post,
     )
-    progress.update('baseline simulation')
+    baseline_elapsed = time.perf_counter() - baseline_start
+    progress.update(f'baseline simulation ({baseline_elapsed:.1f}s)')
     
     matrix = np.zeros((len(v), len(current_names)))
     for i, current_name in enumerate(current_names):
@@ -397,8 +418,12 @@ def cal_identifiability(
         v_star = v
         for vec in vec_lst:
             for epsilon_index, epsilon in enumerate(epsilon_list):
+                if show_progress:
+                    progress.render(f'vector {vec}, epsilon {epsilon} running')
+                perturb_start = time.perf_counter()
                 t_bar, v_bar = get_voltage(vec, epsilon)
-                progress.update(f'vector {vec}, epsilon {epsilon}')
+                perturb_elapsed = time.perf_counter() - perturb_start
+                progress.update(f'vector {vec}, epsilon {epsilon} ({perturb_elapsed:.1f}s)')
                 if len(v_bar) == 0:
                     continue
                 H_value = H_test(t, v_star, t_bar, v_bar)
@@ -438,7 +463,10 @@ def cal_identifiability_parallel(
 
     progress = ProgressBar(total=1 + 12 * 2, enabled=show_progress)
     if show_progress:
-        progress.render('baseline simulation running')
+        sys.stderr.write(f'\nRun: {describe_run(dimension, integration_method, integration_step, initial_wait, simulation_kwargs)}\n')
+        sys.stderr.write(f'Baseline simulation started; perturbation workers={max_workers}...\n')
+        sys.stderr.flush()
+    baseline_start = time.perf_counter()
     t, v, base_c = run_baseline_pacing_simulation(
         drug_name,
         pacing_period,
@@ -452,7 +480,8 @@ def cal_identifiability_parallel(
         record_pre=record_pre,
         record_post=record_post,
     )
-    progress.update('baseline simulation')
+    baseline_elapsed = time.perf_counter() - baseline_start
+    progress.update(f'baseline simulation ({baseline_elapsed:.1f}s)')
 
     matrix = np.zeros((len(v), len(current_names)))
     for i, current_name in enumerate(current_names):
@@ -486,8 +515,13 @@ def cal_identifiability_parallel(
         resolved_vectors = set()
         if max_workers == 1:
             for task in tasks:
+                vec_label, epsilon_label = task[0], task[1]
+                if show_progress:
+                    progress.render(f'vector {vec_label}, epsilon {epsilon_label} running')
+                perturb_start = time.perf_counter()
                 vec, epsilon, t_bar, v_bar = _run_perturbation_voltage_task(task)
-                progress.update(f'vector {vec}, epsilon {epsilon}')
+                perturb_elapsed = time.perf_counter() - perturb_start
+                progress.update(f'vector {vec}, epsilon {epsilon} ({perturb_elapsed:.1f}s)')
                 if len(v_bar) == 0:
                     continue
                 H_value = H_test(t, v, t_bar, v_bar)
@@ -496,10 +530,14 @@ def cal_identifiability_parallel(
         else:
             mp_context = multiprocessing.get_context('fork') if hasattr(os, 'fork') else None
             with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context) as executor:
+                if show_progress:
+                    sys.stderr.write(f'\nSubmitted {len(tasks)} perturbation simulations...\n')
+                    sys.stderr.flush()
                 futures = [executor.submit(_run_perturbation_voltage_task, task) for task in tasks]
                 for future in as_completed(futures):
+                    perturb_finish = time.perf_counter()
                     vec, epsilon, t_bar, v_bar = future.result()
-                    progress.update(f'vector {vec}, epsilon {epsilon}')
+                    progress.update(f'vector {vec}, epsilon {epsilon} finished at {perturb_finish - baseline_start:.1f}s')
                     if len(v_bar) == 0:
                         continue
                     H_value = H_test(t, v, t_bar, v_bar)
