@@ -840,7 +840,34 @@ def _torch_rush_larsen_gate_step(torch, state, dt):
     return next_state
 
 
-def _torch_html_2d_laplacian(torch, voltage, dx, dy):
+def _torch_laplacian_kernel(torch, dx, dy, dtype, device):
+    cddx = 1.0 / dx ** 2
+    cddy = 1.0 / dy ** 2
+    gamma = 1.0 / 3.0
+    diagonal = gamma * 0.5 * (cddx + cddy)
+    horizontal = (1.0 - gamma) * cddx
+    vertical = (1.0 - gamma) * cddy
+    center = -2.0 * (cddx + cddy)
+    kernel = torch.tensor(
+        [
+            [diagonal, vertical, diagonal],
+            [horizontal, center, horizontal],
+            [diagonal, vertical, diagonal],
+        ],
+        dtype=dtype,
+        device=device,
+    )
+    return kernel.view(1, 1, 3, 3)
+
+
+def _torch_html_2d_laplacian(torch, voltage, dx, dy, kernel=None):
+    if kernel is not None:
+        import torch.nn.functional as F
+
+        voltage_4d = voltage.unsqueeze(0).unsqueeze(0)
+        padded = F.pad(voltage_4d, (1, 1, 1, 1), mode='replicate')
+        return F.conv2d(padded, kernel).squeeze(0).squeeze(0)
+
     center = voltage
     east = torch.empty_like(voltage)
     west = torch.empty_like(voltage)
@@ -921,6 +948,7 @@ def run_tnnp_simulation_2d(
     return_voltage_maps=False,
     backend='cpu',
     torch_device=None,
+    torch_compile=False,
 ):
     """Run a fixed-step 2D TNNP simulation on [0, 1]^2.
 
@@ -958,6 +986,7 @@ def run_tnnp_simulation_2d(
                     max_activation_wait=max_activation_wait,
                     return_voltage_maps=return_voltage_maps,
                     device=selected_device,
+                    torch_compile=torch_compile,
                 )
         except RuntimeError:
             if backend == 'torch':
@@ -1101,6 +1130,7 @@ def _run_tnnp_simulation_2d_torch(
     max_activation_wait=1000.0,
     return_voltage_maps=False,
     device=None,
+    torch_compile=False,
 ):
     torch = _torch_module()
     if device is None:
@@ -1137,6 +1167,21 @@ def _run_tnnp_simulation_2d_torch(
     measure_y, measure_x = _point_to_index(measurement_point, nx, ny, 'measurement_point')
     dx = 1.0 / nx
     dy = 1.0 / ny
+    laplacian_kernel = _torch_laplacian_kernel(torch, dx, dy, dtype, device)
+
+    def advance_fixed_step(current_state, current_i_stim, current_laplacian):
+        next_state_local = _torch_rush_larsen_gate_step(torch, current_state, step_dt)
+        rates_local = _torch_rhs_with_stimulus_current(torch, next_state_local, p, c, current_i_stim)
+        next_state_local[..., 12:19] = next_state_local[..., 12:19] + step_dt * rates_local[..., 12:19]
+        next_state_local[..., 17] = next_state_local[..., 17] + step_dt * (
+            (1.0 / c_m - 1.0) * rates_local[..., 17]
+            + diff_coef * current_laplacian
+        )
+        return next_state_local
+
+    compiled_advance_fixed_step = advance_fixed_step
+    if torch_compile and device.type == 'cuda' and hasattr(torch, 'compile'):
+        compiled_advance_fixed_step = torch.compile(advance_fixed_step, mode='reduce-overhead')
 
     recorded_time = []
     recorded_voltage = []
@@ -1200,7 +1245,7 @@ def _run_tnnp_simulation_2d_torch(
 
         dt = min(step_dt, total_time - t)
         old_voltage = state[:, :, 17]
-        laplacian = _torch_html_2d_laplacian(torch, old_voltage, dx, dy)
+        laplacian = _torch_html_2d_laplacian(torch, old_voltage, dx, dy, kernel=laplacian_kernel)
         stimulus = _stimulus(t, pacing_period, p)
         i_stim = torch.where(
             pace_mask,
@@ -1208,10 +1253,13 @@ def _run_tnnp_simulation_2d_torch(
             torch.zeros((), dtype=dtype, device=device),
         )
 
-        next_state = _torch_rush_larsen_gate_step(torch, state, dt)
-        rates = _torch_rhs_with_stimulus_current(torch, next_state, p, c, i_stim)
-        next_state[..., 12:19] = next_state[..., 12:19] + dt * rates[..., 12:19]
-        next_state[..., 17] = next_state[..., 17] + dt * ((1.0 / c_m - 1.0) * rates[..., 17] + diff_coef * laplacian)
+        if dt == step_dt:
+            next_state = compiled_advance_fixed_step(state, i_stim, laplacian)
+        else:
+            next_state = _torch_rush_larsen_gate_step(torch, state, dt)
+            rates = _torch_rhs_with_stimulus_current(torch, next_state, p, c, i_stim)
+            next_state[..., 12:19] = next_state[..., 12:19] + dt * rates[..., 12:19]
+            next_state[..., 17] = next_state[..., 17] + dt * ((1.0 / c_m - 1.0) * rates[..., 17] + diff_coef * laplacian)
 
         if not bool(torch.isfinite(next_state).all().detach().cpu()):
             raise RuntimeError(f'PyTorch 2D integration produced a non-finite state at t={t + dt:g} ms')
@@ -1252,6 +1300,7 @@ def generate_tnnp_2d_measurement_gif(
     mark_points=True,
     backend='auto',
     torch_device=None,
+    torch_compile=False,
 ):
     """Generate a GIF of the 2D voltage maps during the measured APD window."""
     if frame_interval <= 0:
@@ -1289,6 +1338,7 @@ def generate_tnnp_2d_measurement_gif(
         return_voltage_maps=True,
         backend=backend,
         torch_device=torch_device,
+        torch_compile=torch_compile,
     )
     if len(voltage_maps) == 0:
         raise RuntimeError('No 2D frames were recorded for the measurement window')

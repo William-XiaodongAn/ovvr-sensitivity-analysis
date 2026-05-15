@@ -517,6 +517,7 @@ if __name__ == '__main__':
     parser.add_argument('--map-size', type=int, default=32, help='2D square grid size; uses nx=ny=map_size')
     parser.add_argument('--backend', choices=['auto', 'cpu', 'torch'], default='auto', help='2D compute backend: auto uses PyTorch on CUDA/MPS when available')
     parser.add_argument('--torch-device', type=str, default=None, help='Optional PyTorch device override, e.g. cuda, cuda:0, mps, or cpu')
+    parser.add_argument('--torch-compile', action='store_true', help='Use torch.compile for the 2D PyTorch stepper on CUDA')
     parser.add_argument('--measurement-gif', nargs='?', const='tnnp_2d_measurement.gif', default=None, help='Generate a 2D APD measurement GIF at the optional output path and exit')
     
     args = parser.parse_args()
@@ -549,6 +550,7 @@ if __name__ == '__main__':
             'measurement_point': args.measurement_point,
             'backend': args.backend,
             'torch_device': args.torch_device,
+            'torch_compile': args.torch_compile,
         }
         if args.backend in {'auto', 'torch'} and not args.serial and args.workers is None:
             identifiability_kwargs['max_workers'] = 1
@@ -569,6 +571,7 @@ if __name__ == '__main__':
             measurement_point=args.measurement_point,
             backend=args.backend,
             torch_device=args.torch_device,
+            torch_compile=args.torch_compile,
         )
         print(f"Saved 2D measurement GIF: {meta['output_path']}")
         print(f"Frames: {meta['frame_count']}")
