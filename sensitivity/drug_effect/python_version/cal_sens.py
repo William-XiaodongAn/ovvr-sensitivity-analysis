@@ -42,7 +42,7 @@ class ProgressBar:
         filled = int(self.width * done / self.total)
         bar = '#' * filled + '-' * (self.width - filled)
         percent = 100 * done / self.total
-        sys.stderr.write(f'\r[{bar}] {done}/{self.total} {percent:5.1f}% {label}')
+        sys.stderr.write(f'\r[{bar}] {done}/{self.total} {percent:5.1f}% {label}\033[K')
         sys.stderr.flush()
 
     def close(self):
@@ -345,6 +345,8 @@ def cal_identifiability(
     current_names = CURRENT_NAMES
 
     progress = ProgressBar(total=1 + 12 * 2, enabled=show_progress)
+    if show_progress:
+        progress.render('baseline simulation running')
     t, v, base_c = run_baseline_pacing_simulation(
         drug_name,
         pacing_period,
@@ -435,6 +437,8 @@ def cal_identifiability_parallel(
         raise ValueError('max_workers must be at least 1')
 
     progress = ProgressBar(total=1 + 12 * 2, enabled=show_progress)
+    if show_progress:
+        progress.render('baseline simulation running')
     t, v, base_c = run_baseline_pacing_simulation(
         drug_name,
         pacing_period,
@@ -480,17 +484,27 @@ def cal_identifiability_parallel(
 
     try:
         resolved_vectors = set()
-        mp_context = multiprocessing.get_context('fork') if hasattr(os, 'fork') else None
-        with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context) as executor:
-            futures = [executor.submit(_run_perturbation_voltage_task, task) for task in tasks]
-            for future in as_completed(futures):
-                vec, epsilon, t_bar, v_bar = future.result()
+        if max_workers == 1:
+            for task in tasks:
+                vec, epsilon, t_bar, v_bar = _run_perturbation_voltage_task(task)
                 progress.update(f'vector {vec}, epsilon {epsilon}')
                 if len(v_bar) == 0:
                     continue
                 H_value = H_test(t, v, t_bar, v_bar)
                 if H_value > 0.25:
                     resolved_vectors.add(vec)
+        else:
+            mp_context = multiprocessing.get_context('fork') if hasattr(os, 'fork') else None
+            with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context) as executor:
+                futures = [executor.submit(_run_perturbation_voltage_task, task) for task in tasks]
+                for future in as_completed(futures):
+                    vec, epsilon, t_bar, v_bar = future.result()
+                    progress.update(f'vector {vec}, epsilon {epsilon}')
+                    if len(v_bar) == 0:
+                        continue
+                    H_value = H_test(t, v, t_bar, v_bar)
+                    if H_value > 0.25:
+                        resolved_vectors.add(vec)
 
         unidentifiable_space = [vec for vec in range(12) if vec not in resolved_vectors]
         return projection_identifiability(current_names, S, V, unidentifiable_space)

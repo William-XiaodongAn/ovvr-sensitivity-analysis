@@ -133,6 +133,12 @@ def _stimulus(t, pacing_period, p):
     return 0.0
 
 
+def _measurement_window_stimulus(t, initial_wait, pacing_period, p):
+    if t + 1e-9 < initial_wait:
+        return 0.0
+    return _stimulus(t - initial_wait, pacing_period, p)
+
+
 def _currents_from_state(state, p, c):
     Xr1, Xr2, Xs, m, h, j, d, f, f2, fCass, s, r, Ca_i, R_prime, Ca_SR, Ca_ss, Na_i, V, K_i = state
 
@@ -1084,7 +1090,7 @@ def run_tnnp_simulation_2d(
         dt = min(step_dt, total_time - t)
         old_voltage = state[:, :, 17].copy()
         laplacian = _html_2d_laplacian(old_voltage, dx, dy)
-        stimulus = _stimulus(t, pacing_period, p)
+        stimulus = _measurement_window_stimulus(t, initial_wait, pacing_period, p)
 
         next_state = state.copy()
         for y in range(ny):
@@ -1251,7 +1257,7 @@ def _run_tnnp_simulation_2d_torch(
         dt = min(step_dt, total_time - t)
         old_voltage = state[:, :, 17]
         laplacian = _torch_html_2d_laplacian(torch, old_voltage, dx, dy, kernel=laplacian_kernel)
-        stimulus = _stimulus(t, pacing_period, p)
+        stimulus = _measurement_window_stimulus(t, initial_wait, pacing_period, p)
         i_stim = torch.where(
             pace_mask,
             torch.as_tensor(stimulus, dtype=dtype, device=device),
