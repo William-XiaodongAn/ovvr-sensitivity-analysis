@@ -1181,7 +1181,11 @@ def _run_tnnp_simulation_2d_torch(
 
     compiled_advance_fixed_step = advance_fixed_step
     if torch_compile and device.type == 'cuda' and hasattr(torch, 'compile'):
-        compiled_advance_fixed_step = torch.compile(advance_fixed_step, mode='reduce-overhead')
+        compiled_advance_fixed_step = torch.compile(
+            advance_fixed_step,
+            mode='reduce-overhead',
+            options={'triton.cudagraphs': False},
+        )
 
     recorded_time = []
     recorded_voltage = []
