@@ -1,9 +1,0 @@
-Code for running the simulation and compute the identifiability index corresponding to Table IV in [1]. 
-
-The simulations can be run using the scripts: 
-   run_no_drug.m
-   run_verapamil.m
-   run_cisapride.m
-
-References:
-[1] Jæger, K. H., Wall, S., & Tveito, A. (2019). Detecting undetectables: Can conductances of action potential models be changed without appreciable change in the transmembrane potential?. Chaos: An Interdisciplinary Journal of Nonlinear Science, 29(7).
