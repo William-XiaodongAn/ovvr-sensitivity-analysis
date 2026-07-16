@@ -1459,7 +1459,6 @@ def _run_tnnp_simulation_2d_torch(
             if should_check_finite and not bool(torch.isfinite(next_state).all().detach().cpu()):
                 raise RuntimeError(f'PyTorch 2D integration produced a non-finite state at t={t + dt:g} ms')
             state = next_state
-            previous_measured_voltage = measured_voltage
 
     reporter.finish(current_simulation_time)
     if return_voltage_maps:
