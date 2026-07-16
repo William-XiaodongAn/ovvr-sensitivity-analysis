@@ -1045,8 +1045,16 @@ def run_tnnp_simulation_2d(
     prewait_integration_method='BDF',
     show_time_progress=False,
     time_progress_interval=5.0,
+    snapshot_interval=None,
+    snapshot_callback=None,
+    spatial_prewait=False,
 ):
     """Run a fixed-step 2D TNNP simulation on [0, 1]^2.
+
+    When ``spatial_prewait`` is False (default) the initial_wait transient is
+    computed once on a single cell and broadcast across the grid (fast).
+    When True the full 2D sheet is stepped and paced through the entire
+    initial_wait, so wave propagation during the transient is faithful.
 
     The voltage diffusion term follows the 9-point stencil used by the local
     2D-TNNP HTML shader. Ionic states are shared with the 1D implementation.
@@ -1087,6 +1095,9 @@ def run_tnnp_simulation_2d(
                     prewait_integration_method=prewait_integration_method,
                     show_time_progress=show_time_progress,
                     time_progress_interval=time_progress_interval,
+                    snapshot_interval=snapshot_interval,
+                    snapshot_callback=snapshot_callback,
+                    spatial_prewait=spatial_prewait,
                 )
         except RuntimeError:
             if backend == 'torch':
@@ -1124,18 +1135,25 @@ def run_tnnp_simulation_2d(
     dx = 1.0 / nx
     dy = 1.0 / ny
     num_steps = int(math.ceil(total_time / step_dt))
-    start_step = min(num_steps, int(math.ceil(initial_wait / step_dt - 1e-12))) if initial_wait > 0 else 0
-    prewait_state = _advance_resting_state(
-        initial_state,
-        p,
-        c,
-        min(start_step * step_dt, float(total_time)),
-        step_dt,
-        prewait_integration_method,
-    )
-    state = np.broadcast_to(prewait_state, (ny, nx, 19)).copy()
-    current_simulation_time = min(start_step * step_dt, float(total_time))
-    reporter.update(current_simulation_time, force=start_step > 0)
+    if spatial_prewait:
+        # Faithful: step the full paced 2D sheet through the entire wait.
+        start_step = 0
+        state = np.broadcast_to(np.asarray(initial_state, dtype=float), (ny, nx, 19)).copy()
+        current_simulation_time = 0.0
+        reporter.update(0.0, force=True)
+    else:
+        start_step = min(num_steps, int(math.ceil(initial_wait / step_dt - 1e-12))) if initial_wait > 0 else 0
+        prewait_state = _advance_resting_state(
+            initial_state,
+            p,
+            c,
+            min(start_step * step_dt, float(total_time)),
+            step_dt,
+            prewait_integration_method,
+        )
+        state = np.broadcast_to(prewait_state, (ny, nx, 19)).copy()
+        current_simulation_time = min(start_step * step_dt, float(total_time))
+        reporter.update(current_simulation_time, force=start_step > 0)
 
     recorded_time = []
     recorded_voltage = []
@@ -1149,11 +1167,17 @@ def run_tnnp_simulation_2d(
     peak_voltage = float(state[measure_y, measure_x, 17])
     previous_measured_voltage = float(state[measure_y, measure_x, 17])
     finite_check_interval = 0 if finite_check_interval is None else int(finite_check_interval)
+    snapshot_enabled = snapshot_callback is not None and snapshot_interval and snapshot_interval > 0
+    next_snapshot_time = current_simulation_time if snapshot_enabled else None
 
     for step in range(start_step, num_steps + 1):
         t = min(step * step_dt, total_time)
         current_simulation_time = t
         reporter.update(t)
+        if snapshot_enabled and t + 1e-9 >= next_snapshot_time:
+            snapshot_callback(t, state[:, :, 17].copy())
+            while next_snapshot_time <= t + 1e-9:
+                next_snapshot_time += snapshot_interval
         measured_voltage = float(state[measure_y, measure_x, 17])
 
         if not measuring and t + 1e-9 >= initial_wait:
@@ -1202,7 +1226,10 @@ def run_tnnp_simulation_2d(
         dt = min(step_dt, total_time - t)
         old_voltage = state[:, :, 17].copy()
         laplacian = _html_2d_laplacian(old_voltage, dx, dy)
-        stimulus = _measurement_window_stimulus(t, initial_wait, pacing_period, p)
+        stimulus = (
+            _stimulus(t, pacing_period, p) if spatial_prewait
+            else _measurement_window_stimulus(t, initial_wait, pacing_period, p)
+        )
 
         next_state = state.copy()
         for y in range(ny):
@@ -1259,6 +1286,9 @@ def _run_tnnp_simulation_2d_torch(
     prewait_integration_method='BDF',
     show_time_progress=False,
     time_progress_interval=5.0,
+    snapshot_interval=None,
+    snapshot_callback=None,
+    spatial_prewait=False,
 ):
     torch = _torch_module()
     if device is None:
@@ -1299,20 +1329,26 @@ def _run_tnnp_simulation_2d_torch(
     dy = 1.0 / ny
     laplacian_kernel = _torch_laplacian_kernel(torch, dx, dy, dtype, device)
     num_steps = int(math.ceil(total_time / step_dt))
-    start_step = min(num_steps, int(math.ceil(initial_wait / step_dt - 1e-12))) if initial_wait > 0 else 0
-    prewait_state = _advance_resting_state(
-        initial_state,
-        p,
-        c,
-        min(start_step * step_dt, float(total_time)),
-        step_dt,
-        prewait_integration_method,
-    )
+    if spatial_prewait:
+        # Faithful: step the full paced 2D sheet through the entire wait.
+        start_step = 0
+        prewait_state = np.asarray(initial_state, dtype=float)
+        current_simulation_time = 0.0
+    else:
+        start_step = min(num_steps, int(math.ceil(initial_wait / step_dt - 1e-12))) if initial_wait > 0 else 0
+        prewait_state = _advance_resting_state(
+            initial_state,
+            p,
+            c,
+            min(start_step * step_dt, float(total_time)),
+            step_dt,
+            prewait_integration_method,
+        )
+        current_simulation_time = min(start_step * step_dt, float(total_time))
     initial_state_tensor = torch.as_tensor(prewait_state, dtype=dtype, device=device)
     state = initial_state_tensor.view(1, 1, 19).expand(ny, nx, 19).clone()
     finite_check_interval = 0 if finite_check_interval is None else int(finite_check_interval)
-    current_simulation_time = min(start_step * step_dt, float(total_time))
-    reporter.update(current_simulation_time, force=start_step > 0)
+    reporter.update(current_simulation_time, force=start_step > 0 or spatial_prewait)
 
     def advance_fixed_step(current_state, current_i_stim, current_laplacian):
         next_state_local = _torch_rush_larsen_gate_step(torch, current_state, step_dt)
@@ -1338,67 +1374,67 @@ def _run_tnnp_simulation_2d_torch(
     recorded_currents = {name: [] for name in CURRENT_NAMES}
     recorded_voltage_maps = [] if return_voltage_maps else None
     next_record_time = float(initial_wait)
-    measuring = False
     activated = False
     recovered = False
     resting_voltage = None
-    peak_voltage = float(state[measure_y, measure_x, 17].detach().cpu())
-    previous_measured_voltage = peak_voltage
+    peak_voltage = None
+    previous_measured_voltage = None
+    snapshot_enabled = snapshot_callback is not None and snapshot_interval and snapshot_interval > 0
+    next_snapshot_time = current_simulation_time if snapshot_enabled else None
 
     with torch.no_grad():
         for step in range(start_step, num_steps + 1):
             t = min(step * step_dt, total_time)
             current_simulation_time = t
             reporter.update(t)
-            measured_voltage = float(state[measure_y, measure_x, 17].detach().cpu())
+            if snapshot_enabled and t + 1e-9 >= next_snapshot_time:
+                snapshot_callback(t, state[:, :, 17].detach().cpu().numpy().copy())
+                while next_snapshot_time <= t + 1e-9:
+                    next_snapshot_time += snapshot_interval
 
-            if not measuring and t + 1e-9 >= initial_wait:
-                measuring = True
-                resting_voltage = measured_voltage
-                peak_voltage = measured_voltage
-
-            if measuring and not activated and previous_measured_voltage < activation_threshold <= measured_voltage:
-                activated = True
-
-            if activated:
-                peak_voltage = max(peak_voltage, measured_voltage)
-                if (
-                    peak_voltage > activation_threshold
-                    and previous_measured_voltage > resting_voltage + recovery_tolerance
-                    and measured_voltage <= resting_voltage + recovery_tolerance
-                ):
-                    recovered = True
-
-            while measuring and t + 1e-9 >= next_record_time:
+            # Record and detect activation/recovery only at record times. Before the
+            # measurement window (t < initial_wait) nothing in this block touches the
+            # GPU, so the transient runs entirely on-device with no per-step sync.
+            while t + 1e-9 >= next_record_time:
                 measured_state = state[measure_y, measure_x].detach().cpu().numpy().astype(float)
                 measured_currents = _currents_from_state(measured_state, p, c)
+                measured_voltage = float(measured_state[17])
                 recorded_time.append(float(next_record_time - initial_wait))
-                recorded_voltage.append(float(measured_state[17]))
+                recorded_voltage.append(measured_voltage)
                 for name in CURRENT_NAMES:
                     recorded_currents[name].append(measured_currents[name])
                 if return_voltage_maps:
                     recorded_voltage_maps.append(state[:, :, 17].detach().cpu().numpy().copy())
+
+                if resting_voltage is None:
+                    resting_voltage = measured_voltage
+                    peak_voltage = measured_voltage
+                    previous_measured_voltage = measured_voltage
+                if not activated and previous_measured_voltage < activation_threshold <= measured_voltage:
+                    activated = True
+                if activated:
+                    peak_voltage = max(peak_voltage, measured_voltage)
+                    if (
+                        peak_voltage > activation_threshold
+                        and previous_measured_voltage > resting_voltage + recovery_tolerance
+                        and measured_voltage <= resting_voltage + recovery_tolerance
+                    ):
+                        recovered = True
+                previous_measured_voltage = measured_voltage
                 next_record_time += record_interval
+                if recovered:
+                    break
 
-            if recovered:
-                if not recorded_time or recorded_time[-1] < t - initial_wait:
-                    measured_state = state[measure_y, measure_x].detach().cpu().numpy().astype(float)
-                    measured_currents = _currents_from_state(measured_state, p, c)
-                    recorded_time.append(float(t - initial_wait))
-                    recorded_voltage.append(float(measured_state[17]))
-                    for name in CURRENT_NAMES:
-                        recorded_currents[name].append(measured_currents[name])
-                    if return_voltage_maps:
-                        recorded_voltage_maps.append(state[:, :, 17].detach().cpu().numpy().copy())
-                break
-
-            if t >= total_time:
+            if recovered or t >= total_time:
                 break
 
             dt = min(step_dt, total_time - t)
             old_voltage = state[:, :, 17]
             laplacian = _torch_html_2d_laplacian(torch, old_voltage, dx, dy, kernel=laplacian_kernel)
-            stimulus = _measurement_window_stimulus(t, initial_wait, pacing_period, p)
+            stimulus = (
+                _stimulus(t, pacing_period, p) if spatial_prewait
+                else _measurement_window_stimulus(t, initial_wait, pacing_period, p)
+            )
             i_stim = pace_mask * stimulus
 
             if dt == step_dt:
