@@ -1,8 +1,11 @@
 """Standalone 2D ten Tusscher-Panfilov (2006) monodomain PDE solver.
 
-Plain forward-Euler in time for all 19 state variables, explicit 9-point
-Laplacian for voltage diffusion, PyTorch backend (CUDA/MPS/CPU). Self-contained:
-no dependency on simulation.py or drug_dict.pkl.
+Time integration matches the reference (Chaos Lab WebGL) solver:
+  * 12 gating variables : Rush-Larsen (exact exponential, unconditionally stable)
+  * concentrations + V  : forward Euler
+  * voltage diffusion   : explicit 9-point Laplacian
+PyTorch backend (CUDA/MPS/CPU). Self-contained: no dependency on simulation.py
+or drug_dict.pkl.
 
 Monodomain equation solved per grid node:
 
@@ -11,10 +14,15 @@ Monodomain equation solved per grid node:
 
 Only V (index 17) is spatially coupled; every other variable is a local ODE.
 
+Spatial scaling matters: the grid covers a physical domain of size `domain_size`
+(default 12), so dx = domain_size / grid_size. This keeps dx ~ 0.02-0.05 and lets
+dt = 0.1 ms be stable -- exactly the reference setting (ds=12, dt=0.1, D=0.001).
+Using dx = 1/grid_size instead would force a microscopic dt.
+
 Usage
 -----
-    python tnnp_pde.py --grid-size 256 --dt 0.02 --total-time 500 \
-        --pacing-period 1000 --device cuda
+    python tnnp_pde.py --grid-size 256 --domain-size 12 --total-time 3000 \
+        --pacing-period 1000 --snapshot-interval 1000 --device cuda
 """
 
 import argparse
@@ -275,6 +283,76 @@ def rhs(state, p, g, i_stim):
     return dY
 
 
+def rush_larsen_gates(state, dt):
+    """Exact-exponential (Rush-Larsen) update for the 12 gating variables.
+
+        g_new = g_inf - (g_inf - g) * exp(-dt / tau)
+
+    Unconditionally stable regardless of dt, which is exactly what lets the
+    reference (WebGL) solver march at dt = 0.1 ms despite the very fast INa
+    activation (tau_m can be < 0.1 ms). Concentrations and V are integrated
+    separately by forward Euler in the caller.
+    """
+    V = state[..., 17]
+    Ca_ss = state[..., 15]
+    new = state.clone()
+    specs = []  # (state index, g_inf, tau)
+
+    xr1_inf = 1.0 / (1 + _exp(-26 / 7 - V / 7))
+    specs.append((0, xr1_inf, (450 / (1 + _exp(-9 / 2 - V / 10)))
+                              * (6 / (1 + 13.5813245226 * _exp(0.0869565217391 * V)))))
+    xr2_inf = 1.0 / (1 + _exp(11 / 3 + V / 24))
+    specs.append((1, xr2_inf, (3 / (1 + _exp(-3 - V / 20)))
+                              * (1.12 / (1 + _exp(-3 + V / 20)))))
+    xs_inf = 1.0 / (1 + _exp(-5 / 14 - V / 14))
+    a_xs = 1400 / torch.sqrt(1 + _exp(5 / 6 - V / 6))
+    b_xs = 1.0 / (1 + _exp(-7 / 3 + V / 15))
+    specs.append((2, xs_inf, 80 + a_xs * b_xs))
+    m_inf = (1 + 0.00184221158117 * _exp(-0.110741971207 * V)) ** -2
+    a_m = 1.0 / (1 + _exp(-12 - V / 5))
+    b_m = 0.1 / (1 + _exp(7 + V / 5)) + 0.1 / (1 + _exp(-1 / 4 + V / 200))
+    specs.append((3, m_inf, a_m * b_m))
+
+    h_inf = (1 + 15212.5932857 * _exp(0.134589502019 * V)) ** -2
+    a_h_lo = 4.43126792958e-07 * _exp(-0.147058823529 * V)
+    b_h_lo = 310000 * _exp(0.3485 * V) + 2.7 * _exp(0.079 * V)
+    a_j_lo = ((37.78 + V) * (-25428 * _exp(0.2444 * V) - 6.948e-06 * _exp(-0.04391 * V))
+              / (1 + 50262745826.0 * _exp(0.311 * V)))
+    b_j_lo = 0.02424 * _exp(-0.01052 * V) / (1 + 0.0039608683399 * _exp(-0.1378 * V))
+    b_h_hi = 0.77 / (0.13 + 0.0497581410839 * _exp(-0.0900900900901 * V))
+    b_j_hi = 0.6 * _exp(0.057 * V) / (1 + 0.0407622039784 * _exp(-0.1 * V))
+    low_v = V < -40
+    zero = torch.zeros_like(V)
+    a_h = torch.where(low_v, a_h_lo, zero)
+    b_h = torch.where(low_v, b_h_lo, b_h_hi)
+    a_j = torch.where(low_v, a_j_lo, zero)
+    b_j = torch.where(low_v, b_j_lo, b_j_hi)
+    specs.append((4, h_inf, 1.0 / (a_h + b_h)))
+    specs.append((5, h_inf, 1.0 / (a_j + b_j)))
+
+    d_inf = 1.0 / (1 + 0.344153786865 * _exp(-0.133333333333 * V))
+    a_d = 0.25 + 1.4 / (1 + _exp(-35 / 13 - V / 13))
+    b_d = 1.4 / (1 + _exp(1 + V / 5))
+    g_d = 1.0 / (1 + _exp(5 / 2 - V / 20))
+    specs.append((6, d_inf, a_d * b_d + g_d))
+    f_inf = 1.0 / (1 + _exp(20 / 7 + V / 7))
+    tau_f = 20 + 180 / (1 + _exp(3 + V / 10)) + 200 / (1 + _exp(13 / 10 - V / 10)) + 1102.5 * _exp(-(27 + V) ** 2 / 225)
+    specs.append((7, f_inf, tau_f))
+    f2_inf = 0.33 + 0.67 / (1 + _exp(5 + V / 7))
+    tau_f2 = 31 / (1 + _exp(5 / 2 - V / 10)) + 80 / (1 + _exp(3 + V / 10)) + 562 * _exp(-(27 + V) ** 2 / 240)
+    specs.append((8, f2_inf, tau_f2))
+    fCass_inf = 0.4 + 0.6 / (1 + 400.0 * Ca_ss ** 2)
+    specs.append((9, fCass_inf, 2 + 80 / (1 + 400.0 * Ca_ss ** 2)))
+    specs.append((10, 1.0 / (1 + _exp(4 + V / 5)),
+                  3 + 5 / (1 + _exp(-4 + V / 5)) + 85 * _exp(-(45 + V) ** 2 / 320)))
+    specs.append((11, 1.0 / (1 + _exp(10 / 3 - V / 6)),
+                  0.8 + 9.5 * _exp(-(40 + V) ** 2 / 1800)))
+
+    for idx, g_inf, tau in specs:
+        new[..., idx] = g_inf - (g_inf - state[..., idx]) * torch.exp(-dt / tau)
+    return new
+
+
 # ---------------------------------------------------------------------------
 # Spatial diffusion (explicit 9-point stencil, replicate/no-flux boundary)
 # ---------------------------------------------------------------------------
@@ -325,8 +403,8 @@ def stimulus_value(t, pacing_period, p):
 # Solver
 # ---------------------------------------------------------------------------
 
-def solve(nx=256, ny=256, dt=0.02, total_time=500.0, pacing_period=1000.0,
-          diff_coef=0.001, c_m=1.0, dx=None, dy=None,
+def solve(nx=256, ny=256, dt=0.1, total_time=500.0, pacing_period=1000.0,
+          diff_coef=0.001, c_m=1.0, domain_size=12.0, dx=None, dy=None,
           pacemaker_point=(0.05, 0.5), pacemaker_radius=0.03,
           measurement_point=(0.5, 0.5), record_interval=0.1,
           conductance_scale=None, device=None, progress_interval=5.0,
@@ -344,8 +422,10 @@ def solve(nx=256, ny=256, dt=0.02, total_time=500.0, pacing_period=1000.0,
     device = torch.device(device)
     dtype = torch.float32 if device.type in {'cuda', 'mps'} else torch.float64
 
-    dx = 1.0 / nx if dx is None else dx
-    dy = 1.0 / ny if dy is None else dy
+    # Physical grid spacing: domain of size `domain_size` covered by nx cells.
+    # (Using dx = 1/nx would shrink dx as the grid refines and force a tiny dt.)
+    dx = domain_size / nx if dx is None else dx
+    dy = domain_size / ny if dy is None else dy
     g = {name: 1.0 for name in (
         'INa', 'IKr', 'ICaL', 'IKs', 'Ito', 'IK1', 'IpK', 'INaK',
         'INaCa', 'IbCa', 'IpCa', 'IbNa')}
@@ -406,10 +486,12 @@ def solve(nx=256, ny=256, dt=0.02, total_time=500.0, pacing_period=1000.0,
             h = min(dt, total_time - t)
             i_stim = pace_mask * stimulus_value(t, pacing_period, p)
             lap = laplacian(state[..., V_INDEX], kernel)
-            dY = rhs(state, p, g, i_stim)
 
-            new_state = state + h * dY                       # forward Euler, all 19 vars
-            new_state[..., V_INDEX] = state[..., V_INDEX] + h * (dY[..., V_INDEX] / c_m + diff_coef * lap)
+            # 1) gates: exact-exponential (Rush-Larsen); 2) concentrations + V: forward Euler.
+            new_state = rush_larsen_gates(state, h)
+            rates = rhs(new_state, p, g, i_stim)             # currents use the updated gates
+            new_state[..., 12:19] = new_state[..., 12:19] + h * rates[..., 12:19]
+            new_state[..., V_INDEX] = state[..., V_INDEX] + h * (rates[..., V_INDEX] / c_m + diff_coef * lap)
 
             if finite_check_interval and (step % finite_check_interval == 0):
                 if not bool(torch.isfinite(new_state).all()):
@@ -422,16 +504,50 @@ def solve(nx=256, ny=256, dt=0.02, total_time=500.0, pacing_period=1000.0,
     return times, voltage, state, snapshots
 
 
-def _stable_dt(nx, ny, diff_coef):
-    dx, dy = 1.0 / nx, 1.0 / ny
-    diff_limit = 0.2 * min(dx, dy) ** 2 / diff_coef if diff_coef > 0 else 0.02
-    return min(0.02, diff_limit)   # 0.02 ms also respects reaction-term stability
+def _stable_dt(nx, ny, diff_coef, domain_size):
+    """Reference dt = 0.1 ms (Rush-Larsen gates make the reaction unconditionally
+    stable); capped only by the explicit-diffusion CFL limit for safety."""
+    dx, dy = domain_size / nx, domain_size / ny
+    diff_limit = 0.2 * min(dx, dy) ** 2 / diff_coef if diff_coef > 0 else 0.1
+    return min(0.1, diff_limit)
+
+
+def write_gif(snapshots, path, vmin=-90.0, vmax=40.0, cmap='turbo', fps=10, upscale=1):
+    """Assemble the recorded voltage snapshots into an animated GIF."""
+    if not snapshots:
+        print('No snapshots recorded; GIF not written.')
+        return
+    try:
+        import matplotlib
+        from matplotlib.colors import Normalize
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover
+        print(f'GIF output needs matplotlib + Pillow ({exc}); skipping GIF.')
+        return
+    try:
+        mapper = matplotlib.colormaps[cmap]
+    except (AttributeError, KeyError):
+        import matplotlib.cm as cm
+        mapper = cm.get_cmap(cmap)
+    norm = Normalize(vmin=vmin, vmax=vmax)
+    frames = []
+    for _, grid in snapshots:
+        rgb = (mapper(norm(grid))[..., :3] * 255).astype(np.uint8)
+        img = Image.fromarray(rgb)
+        if upscale > 1:
+            img = img.resize((img.width * upscale, img.height * upscale), Image.NEAREST)
+        frames.append(img)
+    frames[0].save(path, save_all=True, append_images=frames[1:],
+                   duration=int(1000 / max(fps, 1)), loop=0)
+    print(f'Wrote {len(frames)}-frame GIF -> {path}')
 
 
 def main():
     ap = argparse.ArgumentParser(description='Forward-Euler 2D TNNP monodomain PDE solver (PyTorch).')
     ap.add_argument('--grid-size', type=int, default=256, help='Square grid n (nx=ny=n)')
-    ap.add_argument('--dt', type=float, default=None, help='Time step in ms (default: stability estimate)')
+    ap.add_argument('--domain-size', type=float, default=12.0,
+                    help='Physical domain size (dx = domain_size/grid_size); reference uses 12')
+    ap.add_argument('--dt', type=float, default=None, help='Time step in ms (default: reference 0.1, CFL-capped)')
     ap.add_argument('--total-time', type=float, default=500.0, help='Simulated time in ms')
     ap.add_argument('--pacing-period', type=float, default=1000.0, help='Pace period: pacing cycle length in ms')
     ap.add_argument('--pace-point', type=lambda s: tuple(map(float, s.split(','))), default=(0.05, 0.5),
@@ -445,19 +561,23 @@ def main():
     ap.add_argument('--snapshot-interval', type=float, default=1000.0,
                     help='Sim-time ms between voltage snapshots + time reports (default 1000 = every 1 s)')
     ap.add_argument('--snapshot-dir', type=str, default=None,
-                    help='If set, save each snapshot as a .npy voltage grid in this directory')
+                    help='If set, also save each snapshot as a .npy voltage grid in this directory')
+    ap.add_argument('--gif', type=str, default='tnnp_2d.gif', help='Output animated GIF path (default on)')
+    ap.add_argument('--no-gif', action='store_true', help='Disable GIF output')
+    ap.add_argument('--fps', type=int, default=10, help='GIF frames per second')
     args = ap.parse_args()
 
     n = args.grid_size
-    dt = args.dt if args.dt is not None else _stable_dt(n, n, args.diff_coef)
+    dt = args.dt if args.dt is not None else _stable_dt(n, n, args.diff_coef, args.domain_size)
     dev = args.device or ('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f'TNNP monodomain: {n}x{n}  dt={dt:g} ms  total={args.total_time:g} ms  '
-          f'D={args.diff_coef}  device={dev}')
+    dx = args.domain_size / n
+    print(f'TNNP monodomain: {n}x{n}  domain={args.domain_size:g} (dx={dx:g})  dt={dt:g} ms  '
+          f'total={args.total_time:g} ms  D={args.diff_coef}  device={dev}')
 
     t0 = time.perf_counter()
     times, voltage, _, snapshots = solve(
         nx=n, ny=n, dt=dt, total_time=args.total_time, pacing_period=args.pacing_period,
-        diff_coef=args.diff_coef, pacemaker_point=args.pace_point,
+        diff_coef=args.diff_coef, domain_size=args.domain_size, pacemaker_point=args.pace_point,
         pacemaker_radius=args.pace_radius, measurement_point=args.measure_point,
         record_interval=args.record_interval, device=args.device,
         progress_interval=args.progress_interval,
@@ -469,6 +589,9 @@ def main():
               f'min={voltage.min():.2f} max={voltage.max():.2f} mV | samples={voltage.size}')
     else:
         print(f'Done in {elapsed:.2f}s | {len(snapshots)} snapshots | no samples recorded')
+
+    if not args.no_gif:
+        write_gif(snapshots, args.gif, fps=args.fps)
 
 
 if __name__ == '__main__':
