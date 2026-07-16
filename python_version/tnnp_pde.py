@@ -1,9 +1,11 @@
 """Standalone 2D ten Tusscher-Panfilov (2006) monodomain PDE solver.
 
 Time integration matches the reference (Chaos Lab WebGL) solver:
-  * 12 gating variables : Rush-Larsen (exact exponential, unconditionally stable)
-  * concentrations + V  : forward Euler
-  * voltage diffusion   : explicit 9-point Laplacian
+  * 12 gating variables      : Rush-Larsen (exact exponential, unconditionally stable)
+  * Ca_i / Ca_SR / Ca_ss     : ten Tusscher analytic buffer solve (stable when stiff)
+  * R', Na_i, K_i, V         : forward Euler
+  * voltage diffusion        : explicit 9-point Laplacian
+These choices are exactly what make dt = 0.1 ms stable.
 PyTorch backend (CUDA/MPS/CPU). Self-contained: no dependency on simulation.py
 or drug_dict.pkl.
 
@@ -93,6 +95,21 @@ def _exp(x):
     """Overflow-guarded exp; float32 saturates far sooner than float64."""
     limit = 80.0 if x.dtype == torch.float32 else 700.0
     return torch.exp(torch.clamp(x, -limit, limit))
+
+
+def _buffer_update(ca_old, dflux, dt, buf_tot, k_buf):
+    """ten Tusscher analytic (quasi-steady) calcium buffer update.
+
+    Solves for the new *free* Ca that satisfies the buffering equilibrium after
+    adding the raw flux dt*dflux to total Ca. This exact quadratic solve is what
+    keeps the stiff Ca subsystem stable at dt = 0.1 ms (a plain forward-Euler
+    beta-factor update diverges). Matches the reference WebGL shader.
+    """
+    d = dt * dflux
+    buf_old = buf_tot * ca_old / (ca_old + k_buf)
+    b = buf_tot - buf_old - d - ca_old + k_buf
+    c = k_buf * (buf_old + d + ca_old)
+    return (torch.sqrt(b * b + 4.0 * c) - b) / 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -253,23 +270,23 @@ def rhs(state, p, g, i_stim):
     dY[..., 11] = (1.0 / (1 + _exp(10 / 3 - V / 6)) - r) / (0.8 + 9.5 * _exp(-(40 + V) ** 2 / 1800))
 
     # --- concentrations ---
-    Ca_i_bufc = 1.0 / (1 + p['Buf_c'] * p['K_buf_c'] / (p['K_buf_c'] + Ca_i) ** 2)
-    Ca_sr_bufsr = 1.0 / (1 + p['Buf_sr'] * p['K_buf_sr'] / (p['K_buf_sr'] + Ca_SR) ** 2)
-    Ca_ss_bufss = 1.0 / (1 + p['Buf_ss'] * p['K_buf_ss'] / (p['K_buf_ss'] + Ca_ss) ** 2)
     kcasr = p['max_sr'] - (p['max_sr'] - p['min_sr']) / (1 + p['EC'] ** 2 / Ca_SR ** 2)
     k2 = p['k2_prime'] * kcasr
 
+    # Calcium entries (12, 14, 15) are RAW total-Ca fluxes (before buffering).
+    # The caller applies the analytic buffer solve; do NOT multiply by a
+    # beta-factor here (that forward-Euler form is unstable at dt = 0.1 ms).
     dY[..., 12] = (
         p['V_sr'] * (-c['Iup'] + c['Ileak']) / p['V_c']
         - p['Cm'] * (-2 * c['INaCa'] + c['IbCa'] + c['IpCa']) / (2 * p['F'] * p['V_c'])
         + c['Ixfer']
-    ) * Ca_i_bufc
+    )
     dY[..., 13] = p['k4'] * (1 - R_prime) - Ca_ss * R_prime * k2
-    dY[..., 14] = (-c['Ileak'] - c['Irel'] + c['Iup']) * Ca_sr_bufsr
+    dY[..., 14] = -c['Ileak'] - c['Irel'] + c['Iup']
     dY[..., 15] = (
         p['V_sr'] * c['Irel'] / p['V_ss'] - p['V_c'] * c['Ixfer'] / p['V_ss']
         - p['Cm'] * c['ICaL'] / (2 * p['F'] * p['V_ss'])
-    ) * Ca_ss_bufss
+    )
     dY[..., 16] = p['Cm'] * (-c['INa'] - c['IbNa'] - 3 * c['INaCa'] - 3 * c['INaK']) / (p['F'] * p['V_c'])
 
     # --- transmembrane potential (ionic part only; diffusion added by caller) ---
@@ -487,10 +504,19 @@ def solve(nx=256, ny=256, dt=0.1, total_time=500.0, pacing_period=1000.0,
             i_stim = pace_mask * stimulus_value(t, pacing_period, p)
             lap = laplacian(state[..., V_INDEX], kernel)
 
-            # 1) gates: exact-exponential (Rush-Larsen); 2) concentrations + V: forward Euler.
+            # Reference integration scheme:
+            #   gates          -> Rush-Larsen (exact exponential)
+            #   Ca_i/CaSR/CaSS -> analytic buffer solve (stiff -> stable at dt=0.1)
+            #   R', Na_i, K_i  -> forward Euler
+            #   V              -> forward Euler + explicit diffusion
             new_state = rush_larsen_gates(state, h)
             rates = rhs(new_state, p, g, i_stim)             # currents use the updated gates
-            new_state[..., 12:19] = new_state[..., 12:19] + h * rates[..., 12:19]
+
+            for idx in (13, 16, 18):
+                new_state[..., idx] = state[..., idx] + h * rates[..., idx]
+            new_state[..., 12] = _buffer_update(state[..., 12], rates[..., 12], h, p['Buf_c'], p['K_buf_c'])
+            new_state[..., 14] = _buffer_update(state[..., 14], rates[..., 14], h, p['Buf_sr'], p['K_buf_sr'])
+            new_state[..., 15] = _buffer_update(state[..., 15], rates[..., 15], h, p['Buf_ss'], p['K_buf_ss'])
             new_state[..., V_INDEX] = state[..., V_INDEX] + h * (rates[..., V_INDEX] / c_m + diff_coef * lap)
 
             if finite_check_interval and (step % finite_check_interval == 0):
