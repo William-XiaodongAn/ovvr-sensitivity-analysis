@@ -12,6 +12,7 @@ from simulation import (
     run_tnnp_final_state,
     run_tnnp_simulation,
     run_tnnp_simulation_2d,
+    run_tnnp_simulation_2d_batch,
 )
 
 CURRENT_NAMES = ['INa', 'IbNa', 'INaK', 'IKr', 'IpK', 'IKs', 'Ito', 'IK1', 'ICaL', 'INaCa', 'IpCa', 'IbCa']
@@ -166,6 +167,29 @@ def auto_worker_count(task_count=24):
             return max(1, min(int(match.group()), task_count))
 
     return max(1, min(os.cpu_count() or 1, task_count))
+
+def torch_2d_batch_available(dimension, simulation_kwargs):
+    """True when the 2D perturbation runs can be executed as a single GPU batch.
+
+    Requires the 2D model, a torch backend request, and an available CUDA/MPS
+    device (or an explicit torch device override / backend='torch').
+    """
+    if dimension != '2d' or not simulation_kwargs:
+        return False
+    if simulation_kwargs.get('backend') not in {'auto', 'torch'}:
+        return False
+    try:
+        import torch
+    except ImportError:
+        return False
+    device_override = simulation_kwargs.get('torch_device')
+    if device_override:
+        return simulation_kwargs.get('backend') == 'torch' or torch.device(device_override).type in {'cuda', 'mps'}
+    if simulation_kwargs.get('backend') == 'torch':
+        return True
+    if torch.cuda.is_available():
+        return True
+    return hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
 
 def run_simulation(
     dimension,
@@ -490,59 +514,100 @@ def cal_identifiability_parallel(
     _, S, Vt = np.linalg.svd(matrix, full_matrices=False)
     V = Vt
 
-    tasks = []
-    for vec in range(12):
-        for epsilon in [-0.5, 0.5]:
-            tasks.append((
-                vec,
-                epsilon,
-                V[vec].copy(),
-                tuple(current_names),
-                drug_name,
-                pacing_period,
-                drug_concentration,
-                None if initial_state is None else np.array(initial_state, dtype=float).copy(),
-                integration_method,
-                integration_step,
-                initial_wait,
-                dimension,
-                simulation_kwargs,
-                record_pre,
-                record_post,
-            ))
+    perturb_specs = [(vec, epsilon) for vec in range(12) for epsilon in [-0.5, 0.5]]
 
     try:
         resolved_vectors = set()
-        if max_workers == 1:
-            for task in tasks:
-                vec_label, epsilon_label = task[0], task[1]
-                if show_progress:
-                    progress.render(f'vector {vec_label}, epsilon {epsilon_label} running')
-                perturb_start = time.perf_counter()
-                vec, epsilon, t_bar, v_bar = _run_perturbation_voltage_task(task)
-                perturb_elapsed = time.perf_counter() - perturb_start
-                progress.update(f'vector {vec}, epsilon {epsilon} ({perturb_elapsed:.1f}s)')
+        if torch_2d_batch_available(dimension, simulation_kwargs):
+            # GPU path: advance all 24 perturbation grids together in one batch so
+            # the independent runs overlap on the device instead of running serially.
+            perturb_list = [
+                {name: 1.0 + epsilon * V[vec][i] for i, name in enumerate(current_names)}
+                for vec, epsilon in perturb_specs
+            ]
+            if show_progress:
+                sys.stderr.write(f'\nRunning {len(perturb_list)} perturbations as a single GPU batch...\n')
+                sys.stderr.flush()
+            results = run_tnnp_simulation_2d_batch(
+                drug_name,
+                pacing_period,
+                drug_concentration,
+                perturb_list,
+                initial_state=initial_state,
+                integration_step=integration_step,
+                initial_wait=initial_wait,
+                record_pre=record_pre,
+                record_post=record_post,
+                nx=simulation_kwargs.get('nx', 32),
+                ny=simulation_kwargs.get('ny', 32),
+                pacemaker_point=simulation_kwargs.get('pacemaker_point', (0.05, 0.5)),
+                pacemaker_radius=simulation_kwargs.get('pacemaker_radius', 0.03),
+                measurement_point=simulation_kwargs.get('measurement_point', (0.5, 0.5)),
+                backend=simulation_kwargs.get('backend', 'auto'),
+                torch_device=simulation_kwargs.get('torch_device'),
+                torch_compile=simulation_kwargs.get('torch_compile', False),
+                show_time_progress=simulation_kwargs.get('show_time_progress', False),
+                time_progress_interval=simulation_kwargs.get('time_progress_interval', 5.0),
+            )
+            for (vec, epsilon), result in zip(perturb_specs, results):
+                t_bar = np.array(result[0])
+                v_bar = np.array(result[1])
+                progress.update(f'vector {vec}, epsilon {epsilon} finished at {time.perf_counter() - baseline_start:.1f}s')
                 if len(v_bar) == 0:
                     continue
-                H_value = H_test(t, v, t_bar, v_bar)
-                if H_value > 0.25:
+                if H_test(t, v, t_bar, v_bar) > 0.25:
                     resolved_vectors.add(vec)
         else:
-            mp_context = multiprocessing.get_context('fork') if hasattr(os, 'fork') else None
-            with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context) as executor:
-                if show_progress:
-                    sys.stderr.write(f'\nSubmitted {len(tasks)} perturbation simulations...\n')
-                    sys.stderr.flush()
-                futures = [executor.submit(_run_perturbation_voltage_task, task) for task in tasks]
-                for future in as_completed(futures):
-                    perturb_finish = time.perf_counter()
-                    vec, epsilon, t_bar, v_bar = future.result()
-                    progress.update(f'vector {vec}, epsilon {epsilon} finished at {perturb_finish - baseline_start:.1f}s')
+            tasks = []
+            for vec, epsilon in perturb_specs:
+                tasks.append((
+                    vec,
+                    epsilon,
+                    V[vec].copy(),
+                    tuple(current_names),
+                    drug_name,
+                    pacing_period,
+                    drug_concentration,
+                    None if initial_state is None else np.array(initial_state, dtype=float).copy(),
+                    integration_method,
+                    integration_step,
+                    initial_wait,
+                    dimension,
+                    simulation_kwargs,
+                    record_pre,
+                    record_post,
+                ))
+
+            if max_workers == 1:
+                for task in tasks:
+                    vec_label, epsilon_label = task[0], task[1]
+                    if show_progress:
+                        progress.render(f'vector {vec_label}, epsilon {epsilon_label} running')
+                    perturb_start = time.perf_counter()
+                    vec, epsilon, t_bar, v_bar = _run_perturbation_voltage_task(task)
+                    perturb_elapsed = time.perf_counter() - perturb_start
+                    progress.update(f'vector {vec}, epsilon {epsilon} ({perturb_elapsed:.1f}s)')
                     if len(v_bar) == 0:
                         continue
                     H_value = H_test(t, v, t_bar, v_bar)
                     if H_value > 0.25:
                         resolved_vectors.add(vec)
+            else:
+                mp_context = multiprocessing.get_context('fork') if hasattr(os, 'fork') else None
+                with ProcessPoolExecutor(max_workers=max_workers, mp_context=mp_context) as executor:
+                    if show_progress:
+                        sys.stderr.write(f'\nSubmitted {len(tasks)} perturbation simulations...\n')
+                        sys.stderr.flush()
+                    futures = [executor.submit(_run_perturbation_voltage_task, task) for task in tasks]
+                    for future in as_completed(futures):
+                        perturb_finish = time.perf_counter()
+                        vec, epsilon, t_bar, v_bar = future.result()
+                        progress.update(f'vector {vec}, epsilon {epsilon} finished at {perturb_finish - baseline_start:.1f}s')
+                        if len(v_bar) == 0:
+                            continue
+                        H_value = H_test(t, v, t_bar, v_bar)
+                        if H_value > 0.25:
+                            resolved_vectors.add(vec)
 
         unidentifiable_space = [vec for vec in range(12) if vec not in resolved_vectors]
         return projection_identifiability(current_names, S, V, unidentifiable_space)

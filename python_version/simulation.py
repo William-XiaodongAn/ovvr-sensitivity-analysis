@@ -1466,6 +1466,318 @@ def _run_tnnp_simulation_2d_torch(
     return recorded_time, recorded_voltage, recorded_currents
 
 
+def _torch_html_2d_laplacian_batch(torch, voltage, dx, dy, kernel):
+    """9-point Laplacian for a batch of voltage grids shaped [B, ny, nx]."""
+    import torch.nn.functional as F
+
+    voltage_4d = voltage.unsqueeze(1)  # [B, 1, ny, nx]
+    padded = F.pad(voltage_4d, (1, 1, 1, 1), mode='replicate')
+    return F.conv2d(padded, kernel).squeeze(1)  # [B, ny, nx]
+
+
+# Conductance channels perturbed/scaled by the drug + perturbation multipliers.
+_CONDUCTANCE_CHANNELS = (
+    'INa', 'IKr', 'ICaL', 'IKs', 'Ito', 'IK1', 'IpK', 'INaK',
+    'INaCa', 'IbCa', 'IpCa', 'IbNa', 'Ileak', 'Iup', 'Ixfer', 'Irel',
+)
+
+
+def _torch_batched_conductances(torch, drug_name, drug_concentration_multiplier, perturb_list, device, dtype):
+    """Build per-batch conductance tensors of shape [B, 1, 1] plus the raw per-element dicts.
+
+    Each perturbation gets its own conductance multipliers; stacking them along a
+    leading batch axis lets a single stepper advance every perturbation at once.
+    The [B, 1, 1] shape broadcasts against the [B, ny, nx] cell fields in the RHS.
+    """
+    per_element = [
+        _conductance_multipliers(drug_name, drug_concentration_multiplier, perturb)
+        for perturb in perturb_list
+    ]
+    c_batch = {}
+    for name in _CONDUCTANCE_CHANNELS:
+        values = [float(element[name]) for element in per_element]
+        c_batch[name] = torch.tensor(values, dtype=dtype, device=device).view(-1, 1, 1)
+    return c_batch, per_element
+
+
+def _run_tnnp_simulation_2d_torch_batch(
+    drug_name,
+    pacing_period,
+    drug_concentration_multiplier,
+    perturb_multipliers_list,
+    total_time=None,
+    initial_wait=20000,
+    record_interval=0.1,
+    integration_step=None,
+    initial_state=None,
+    nx=32,
+    ny=32,
+    pacemaker_point=(0.05, 0.5),
+    pacemaker_radius=0.03,
+    measurement_point=(0.5, 0.5),
+    diff_coef=0.001,
+    c_m=1.0,
+    max_activation_wait=1000.0,
+    device=None,
+    torch_compile=False,
+    finite_check_interval=1000,
+    prewait_integration_method='BDF',
+    show_time_progress=False,
+    time_progress_interval=5.0,
+    spatial_prewait=False,
+    return_currents=False,
+):
+    """Advance a batch of 2D perturbation grids simultaneously on the GPU.
+
+    All ``B = len(perturb_multipliers_list)`` perturbations share one stepper, so
+    the independent runs overlap on the device instead of executing one after
+    another. The measurement trace of the ``measurement_point`` cell is kept on
+    the GPU and copied to host once at the end, avoiding a per-record sync.
+    """
+    torch = _torch_module()
+    if device is None:
+        device = _torch_auto_device(torch)
+    dtype = torch.float32 if device.type in {'cuda', 'mps'} else torch.float64
+
+    perturb_multipliers_list = list(perturb_multipliers_list)
+    batch = len(perturb_multipliers_list)
+    if batch == 0:
+        return []
+    if nx < 2 or ny < 2:
+        raise ValueError('nx and ny must both be at least 2 for 2D simulation')
+    if pacemaker_radius < 0:
+        raise ValueError('pacemaker_radius must be non-negative')
+    if diff_coef < 0:
+        raise ValueError('diff_coef must be non-negative')
+    if c_m <= 0:
+        raise ValueError('c_m must be positive')
+    if finite_check_interval is not None and finite_check_interval < 0:
+        raise ValueError('finite_check_interval must be non-negative')
+
+    if total_time is None:
+        total_time = initial_wait + max_activation_wait
+    reporter = _SimulationTimeReporter(
+        show_time_progress, total_time, time_progress_interval,
+        f'2D torch batch simulation ({device}, B={batch})',
+    )
+    reporter.update(0.0, force=True)
+
+    p = _base_parameters()
+    if initial_state is None:
+        initial_state = MATLAB_INITIAL_STATE
+
+    c_batch, per_element_c = _torch_batched_conductances(
+        torch, drug_name, drug_concentration_multiplier, perturb_multipliers_list, device, dtype
+    )
+
+    step_dt = _default_2d_step(record_interval, nx, ny, diff_coef) if integration_step is None else integration_step
+    if step_dt <= 0:
+        raise ValueError('2D integration step must be positive')
+
+    pace_mask_np = _point_mask(pacemaker_point, pacemaker_radius, nx, ny, 'pacemaker_point')
+    pace_mask = torch.as_tensor(pace_mask_np, dtype=dtype, device=device)
+    measure_y, measure_x = _point_to_index(measurement_point, nx, ny, 'measurement_point')
+    dx = 1.0 / nx
+    dy = 1.0 / ny
+    laplacian_kernel = _torch_laplacian_kernel(torch, dx, dy, dtype, device)
+    num_steps = int(math.ceil(total_time / step_dt))
+
+    if spatial_prewait:
+        start_step = 0
+        base_states = np.broadcast_to(np.asarray(initial_state, dtype=float), (batch, 19)).copy()
+        current_simulation_time = 0.0
+    else:
+        start_step = min(num_steps, int(math.ceil(initial_wait / step_dt - 1e-12))) if initial_wait > 0 else 0
+        wait_time = min(start_step * step_dt, float(total_time))
+        # Each perturbation equilibrates on a single cell under its own conductances.
+        base_states = np.stack([
+            _advance_resting_state(initial_state, p, element_c, wait_time, step_dt, prewait_integration_method)
+            for element_c in per_element_c
+        ], axis=0)
+        current_simulation_time = wait_time
+
+    state = (
+        torch.as_tensor(base_states, dtype=dtype, device=device)
+        .view(batch, 1, 1, 19)
+        .expand(batch, ny, nx, 19)
+        .clone()
+    )
+    finite_check_interval = 0 if finite_check_interval is None else int(finite_check_interval)
+    reporter.update(current_simulation_time, force=start_step > 0 or spatial_prewait)
+
+    def advance_fixed_step(current_state, current_i_stim, current_laplacian):
+        next_state_local = _torch_rush_larsen_gate_step(torch, current_state, step_dt)
+        rates_local = _torch_rhs_with_stimulus_current(torch, next_state_local, p, c_batch, current_i_stim)
+        next_state_local[..., 12:19] = next_state_local[..., 12:19] + step_dt * rates_local[..., 12:19]
+        next_state_local[..., 17] = next_state_local[..., 17] + step_dt * (
+            (1.0 / c_m - 1.0) * rates_local[..., 17]
+            + diff_coef * current_laplacian
+        )
+        return next_state_local
+
+    compiled_advance_fixed_step = advance_fixed_step
+    compiled_uses_cuda = False
+    if torch_compile and device.type == 'cuda' and hasattr(torch, 'compile'):
+        compiled_uses_cuda = True
+        compiled_advance_fixed_step = torch.compile(
+            advance_fixed_step,
+            options={'triton.cudagraphs': False},
+        )
+
+    measured_states = []  # list of [B, 19] tensors, kept on-device until the end
+    recorded_time = []
+    next_record_time = float(initial_wait)
+
+    with torch.no_grad():
+        for step in range(start_step, num_steps + 1):
+            t = min(step * step_dt, total_time)
+            current_simulation_time = t
+            reporter.update(t)
+
+            # Record every perturbation's measured cell without leaving the GPU.
+            # ``.clone()`` detaches from the full [B, ny, nx, 19] buffer so the big
+            # tensor is not pinned alive by these small slices.
+            while t + 1e-9 >= next_record_time:
+                measured_states.append(state[:, measure_y, measure_x].clone())
+                recorded_time.append(float(next_record_time - initial_wait))
+                next_record_time += record_interval
+
+            if t >= total_time:
+                break
+
+            dt = min(step_dt, total_time - t)
+            old_voltage = state[..., 17]  # [B, ny, nx]
+            laplacian = _torch_html_2d_laplacian_batch(torch, old_voltage, dx, dy, laplacian_kernel)
+            stimulus = (
+                _stimulus(t, pacing_period, p) if spatial_prewait
+                else _measurement_window_stimulus(t, initial_wait, pacing_period, p)
+            )
+            i_stim = pace_mask * stimulus  # [ny, nx], broadcasts over the batch
+
+            if dt == step_dt:
+                if (
+                    compiled_uses_cuda
+                    and hasattr(torch, 'compiler')
+                    and hasattr(torch.compiler, 'cudagraph_mark_step_begin')
+                ):
+                    torch.compiler.cudagraph_mark_step_begin()
+                next_state = compiled_advance_fixed_step(state, i_stim, laplacian).clone()
+            else:
+                next_state = _torch_rush_larsen_gate_step(torch, state, dt)
+                rates = _torch_rhs_with_stimulus_current(torch, next_state, p, c_batch, i_stim)
+                next_state[..., 12:19] = next_state[..., 12:19] + dt * rates[..., 12:19]
+                next_state[..., 17] = next_state[..., 17] + dt * ((1.0 / c_m - 1.0) * rates[..., 17] + diff_coef * laplacian)
+
+            should_check_finite = (
+                finite_check_interval == 0
+                or step % finite_check_interval == 0
+                or t + dt >= total_time
+            )
+            if should_check_finite and not bool(torch.isfinite(next_state).all().detach().cpu()):
+                raise RuntimeError(f'PyTorch 2D batch integration produced a non-finite state at t={t + dt:g} ms')
+            state = next_state
+
+    reporter.finish(current_simulation_time)
+
+    time_list = list(recorded_time)
+    if not measured_states:
+        empty_currents = {name: np.array([]) for name in CURRENT_NAMES}
+        if return_currents:
+            return [([], np.array([]), dict(empty_currents)) for _ in range(batch)]
+        return [([], np.array([])) for _ in range(batch)]
+
+    stacked = torch.stack(measured_states, dim=0).detach().cpu().numpy()  # [T, B, 19]
+    results = []
+    for b in range(batch):
+        trajectory = stacked[:, b, :]  # [T, 19]
+        voltage = trajectory[:, 17].astype(float)
+        if return_currents:
+            currents = {name: [] for name in CURRENT_NAMES}
+            for row in trajectory:
+                cell_currents = _currents_from_state(row, p, per_element_c[b])
+                for name in CURRENT_NAMES:
+                    currents[name].append(cell_currents[name])
+            currents = {name: np.array(values) for name, values in currents.items()}
+            results.append((list(time_list), voltage, currents))
+        else:
+            results.append((list(time_list), voltage))
+    return results
+
+
+def run_tnnp_simulation_2d_batch(
+    drug_name,
+    pacing_period,
+    drug_concentration_multiplier,
+    perturb_multipliers_list,
+    total_time=None,
+    initial_wait=20000,
+    record_pre=100,
+    record_post=500,
+    record_interval=0.1,
+    integration_step=None,
+    initial_state=None,
+    nx=32,
+    ny=32,
+    pacemaker_point=(0.05, 0.5),
+    pacemaker_radius=0.03,
+    measurement_point=(0.5, 0.5),
+    diff_coef=0.001,
+    c_m=1.0,
+    max_activation_wait=1000.0,
+    backend='auto',
+    torch_device=None,
+    torch_compile=False,
+    finite_check_interval=1000,
+    prewait_integration_method='BDF',
+    show_time_progress=False,
+    time_progress_interval=5.0,
+    spatial_prewait=False,
+    return_currents=False,
+):
+    """Run many 2D perturbation simulations together as one GPU batch.
+
+    ``perturb_multipliers_list`` is a list of per-run conductance perturbation
+    dicts (as accepted by :func:`run_tnnp_simulation_2d`). Returns a list aligned
+    with that input; each item is ``(recorded_time, voltage)`` or, when
+    ``return_currents`` is True, ``(recorded_time, voltage, currents)``.
+
+    ``record_pre``/``record_post`` are accepted for signature parity with the
+    single-run entry point; the measurement window is bounded by
+    ``max_activation_wait`` exactly as in :func:`_run_tnnp_simulation_2d_torch`.
+    """
+    if backend == 'cpu':
+        raise ValueError('run_tnnp_simulation_2d_batch requires a torch (GPU) backend')
+    torch = _torch_module()
+    device = torch.device(torch_device) if torch_device else _torch_auto_device(torch)
+    return _run_tnnp_simulation_2d_torch_batch(
+        drug_name,
+        pacing_period,
+        drug_concentration_multiplier,
+        perturb_multipliers_list,
+        total_time=total_time,
+        initial_wait=initial_wait,
+        record_interval=record_interval,
+        integration_step=integration_step,
+        initial_state=initial_state,
+        nx=nx,
+        ny=ny,
+        pacemaker_point=pacemaker_point,
+        pacemaker_radius=pacemaker_radius,
+        measurement_point=measurement_point,
+        diff_coef=diff_coef,
+        c_m=c_m,
+        max_activation_wait=max_activation_wait,
+        device=device,
+        torch_compile=torch_compile,
+        finite_check_interval=finite_check_interval,
+        prewait_integration_method=prewait_integration_method,
+        show_time_progress=show_time_progress,
+        time_progress_interval=time_progress_interval,
+        spatial_prewait=spatial_prewait,
+        return_currents=return_currents,
+    )
+
+
 def generate_tnnp_2d_measurement_gif(
     output_path,
     drug_name,
