@@ -426,7 +426,7 @@ def solve(nx=256, ny=256, dt=0.1, total_time=500.0, pacing_period=1000.0,
           measurement_point=(0.5, 0.5), record_interval=0.1,
           conductance_scale=None, device=None, progress_interval=5.0,
           snapshot_interval=1000.0, snapshot_dir=None,
-          finite_check_interval=1000):
+          finite_check_interval=100):
     """Forward-Euler monodomain solve.
 
     Returns (times, voltage_trace, final_state, snapshots), where snapshots is a
@@ -520,8 +520,13 @@ def solve(nx=256, ny=256, dt=0.1, total_time=500.0, pacing_period=1000.0,
             new_state[..., V_INDEX] = state[..., V_INDEX] + h * (rates[..., V_INDEX] / c_m + diff_coef * lap)
 
             if finite_check_interval and (step % finite_check_interval == 0):
-                if not bool(torch.isfinite(new_state).all()):
-                    raise RuntimeError(f'Non-finite state at t={t + h:g} ms (dt likely too large)')
+                finite = torch.isfinite(new_state)
+                if not bool(finite.all()):
+                    bad = (~finite).any(dim=0).any(dim=0)  # -> [19] per-variable flag
+                    names = ', '.join(STATE_NAMES[i] for i in range(19) if bool(bad[i]))
+                    raise RuntimeError(
+                        f'Non-finite state by t={t + h:g} ms in variable(s): {names}. '
+                        f'dt={dt:g} ms is likely too large for forward-Euler V; try --dt 0.02.')
             state = new_state
 
     sys.stderr.write('\n')
@@ -531,11 +536,13 @@ def solve(nx=256, ny=256, dt=0.1, total_time=500.0, pacing_period=1000.0,
 
 
 def _stable_dt(nx, ny, diff_coef, domain_size):
-    """Reference dt = 0.1 ms (Rush-Larsen gates make the reaction unconditionally
-    stable); capped only by the explicit-diffusion CFL limit for safety."""
+    """Pick a stable dt. Forward-Euler V in TNNP is stable near ~0.02 ms; also
+    honor the explicit-diffusion CFL limit. (The reference WebGL nominally uses
+    0.1 ms, which is marginal for a faithful CPU/torch port -- lower dt if you
+    see non-finite states.)"""
     dx, dy = domain_size / nx, domain_size / ny
-    diff_limit = 0.2 * min(dx, dy) ** 2 / diff_coef if diff_coef > 0 else 0.1
-    return min(0.1, diff_limit)
+    diff_limit = 0.2 * min(dx, dy) ** 2 / diff_coef if diff_coef > 0 else 0.02
+    return min(0.02, diff_limit)
 
 
 def write_gif(snapshots, path, vmin=-90.0, vmax=40.0, cmap='turbo', fps=10, upscale=1):
